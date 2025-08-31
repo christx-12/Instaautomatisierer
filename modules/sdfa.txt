@@ -1,0 +1,20 @@
+@startuml
+node "Client\n(Browser)" as client
+node "Webserver" as webserver
+node "Anwendungsserver" as appserver
+database "Datenbankserver" as db
+
+artifact "Web Frontend" as frontend
+artifact "Backend Application" as backend
+
+client --[HTTP/HTTPS]--> webserver
+webserver --[REST, HTTP]--> appserver
+appserver --[JDBC]--> db
+
+webserver : Apache/Nginx
+appserver : z.B. Tomcat/Spring Boot
+db : PostgreSQL / MySQL
+
+webserver : <<deploys>> frontend
+appserver : <<deploys>> backend
+@enduml

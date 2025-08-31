@@ -1,0 +1,6 @@
+.env
+ressources/
+venv/
+test/
+__pycache__ 
+assets/
