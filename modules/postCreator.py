@@ -1,4 +1,5 @@
 import objects.post as post
+#from .objects import post
 import apimanager.geminiAPI as GeminiAPI
 import reelmaker as rm
 import apimanager.instagramapimanger as InstagramApiManager

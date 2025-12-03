@@ -17,3 +17,12 @@ class YouTubeDownloader:
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
+if __name__ == "__main__":
+        downloader = YouTubeDownloader("Downloads")
+        links=(
+            "https://www.youtube.com/watch?v=AZ2gHCQimpQ",
+        )
+        for link in links:
+            output_file = os.path.join("Downloads", f"{link.split('v=')[1].split('&')[0]}.mp4")
+            downloader = YouTubeDownloader(output_file)
+            downloader.download_video(link)
