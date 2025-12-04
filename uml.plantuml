@@ -1,0 +1,48 @@
+@startuml
+
+' Basis-Typen
+class Track {
+  +id: UUID
+  +pfad: String
+  +startpunktMs: int
+  +beatgrids: List<int>
+  +geschwindigkeitBpm: int
+  --
+  +ladeAudio(): void
+  +analysiereBeatgrid(): void
+  +changestart(startInMilisekunden:int)
+}
+
+class Schnittvideo {
+  +id: UUID
+  +pfad: String
+  +laengeMs: int
+  +taktLaenge: int
+  --
+  +berechneEnde(): int
+  +changeLength():int
+  
+}
+class Video {
+  +id: UUI
+  +pfad: String
+  +titel: String
+  +erstelltAm: Date
+  +track: Track
+  +schnittvideos: List<Schnittvideo>
+  --
+  +renderPreview(): void
+  +changeTrack():void
+  +changeTrackstart(entweder mit gridid oder genaue Zeit);
+  +changecutposition(schnittvideoid:int,position:int) 
+  +changeSchnittvideolength(schnittvideoid:int,tackte:int)
+  +exportiere(format: String): void
+}
+
+' Beziehungen
+Track "1" o-- "*" BeatGrid : besteht aus >
+Video "1" o-- "1" Track : nutzt >
+Video "1" o-- "*" Schnittvideo : enthält >
+Schnittvideo "1" --> "1" Track : referenziert >
+
+@enduml
