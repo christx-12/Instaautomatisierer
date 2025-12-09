@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BeatCut UI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+    <div class="app-container">
+        <!-- HEADER -->
+        <header>
+            <div class="logo">
+                <span style="color:#ff00ff;">Beat</span>Cut
+            </div>
+            <div class="info-text">
+                Basiscutgröße: 8 Takte
+            </div>
+        </header>
+
+        <!-- VIDEO AREA -->
+        <main class="video-preview">
+            <div class="video-placeholder">
+                <span style="color: gray;">Video Vorschau</span>
+            </div>
+            
+            <!-- POPUP -->
+            <div class="settings-popup">
+                <div class="setting-row">
+                    <label>Länge:</label>
+                    <div class="value-box">4 Takte</div>
+                    <div class="multiplier">2x</div>
+                </div>
+                <input type="range" min="1" max="8" value="4" class="purple-slider">
+                <br>
+                <div class="setting-row" style="margin-top:10px;">
+                    <label>Raster:</label>
+                    <div class="value-box">Phrasenabstand</div>
+                </div>
+            </div>
+        </main>
+
+        <!-- FOOTER -->
+        <footer>
+            <div class="waveform">
+                <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+            </div>
+            <div class="controls">
+                <button class="btn-purple">Videos</button>
+                <button class="btn-purple">Song</button>
+            </div>
+        </footer>
+    </div>
+
+</body>
+</html>
