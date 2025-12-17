@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+  <body>
+    <h1>Welcome to the Start Page</h1>
+    <p>Upload your media files here.</p>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+        <label for="videos">Videos:</label>
+        <input type="file"  name="videos[]" multiple placeholder="videos" />
+        <label for="song">Song:</label>
+        <input type="file" name="song" placeholder="Description" />
+        <input type="submit" value="Upload" />
+    
+    
+  </body>
+</html>

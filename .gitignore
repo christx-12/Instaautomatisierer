@@ -4,3 +4,5 @@ venv/
 test/
 __pycache__ 
 assets/
+testliverender/
+uploads/

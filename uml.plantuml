@@ -5,7 +5,7 @@ class Track {
   +id: UUID
   +pfad: String
   +startpunktMs: int
-  +beatgrids: List<int>
+  +beatgrids: List<BeatGrid>
   +geschwindigkeitBpm: int
   --
   +ladeAudio(): void
@@ -23,6 +23,10 @@ class Schnittvideo {
   +changeLength():int
   
 }
+Class BeatGrid {
+  +id: UUID
+  +positionMs: int
+}
 class Video {
   +id: UUI
   +pfad: String
@@ -33,9 +37,9 @@ class Video {
   --
   +renderPreview(): void
   +changeTrack():void
-  +changeTrackstart(entweder mit gridid oder genaue Zeit);
-  +changecutposition(schnittvideoid:int,position:int) 
-  +changeSchnittvideolength(schnittvideoid:int,tackte:int)
+  +changeTrackstart(entweder mit gridid oder genaue Zeit):void
+  +changecutposition(schnittvideoid:int,position:int):void
+  +changeSchnittvideolength(schnittvideoid:int,tackte:int):void
   +exportiere(format: String): void
 }
 

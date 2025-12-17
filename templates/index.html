@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <body>
+    <img src="{{ url_for('video_feed') }}" />
+
+    <audio id="audio" controls>
+      <source src="{{ url_for('static', filename='music.mp3') }}" type="audio/mpeg">
+    </audio>
+
+    <script>
+      const audio = document.getElementById('audio');
+
+      // einfache Sync: wenn Audio startet, merke Startzeit im Client
+      let startPerf = null;
+      audio.addEventListener('play', () => {
+        startPerf = performance.now() / 1000.0 - audio.currentTime;
+      });
+
+      // optional: in Zukunft Playhead an Server schicken (seek, pause etc.)
+    </script>
+  </body>
+</html>

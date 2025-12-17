@@ -6,7 +6,7 @@ class musicAnalyzer:
         y, self.sr = librosa.load(music_data)
         self.tempo, self.beat_frames = librosa.beat.beat_track(y=y, sr=self.sr)
         print(f"Geschätztes Tempo: {self.tempo} BPM")
-        print("Beat-Frames:", self.beat_frames)
+        print("Beat-Frames:", librosa.frames_to_time(self.beat_frames,sr=self.sr))
 
 
     def get_start_time(self,start_time):
@@ -23,7 +23,10 @@ class musicAnalyzer:
     
     def get_bar_time(self, bar_length=4):
         return bar_length * self.tempo / 60  # Länge eines Taktes in Sekunden
-    
+    def get_bpm(self):
+        return self.tempo
+    def get_beat_times(self):
+        return librosa.frames_to_time(self.beat_frames, sr=self.sr)
 if __name__ == "__main__":
      # Beispiel zur Verwendung:
     filename = r"assets\music\cri-astray-feat-half-moon-run-original-mix-anjunadeep.mp3"
