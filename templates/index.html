@@ -10,6 +10,9 @@
         <header>
             <h1>Mein Cloud Editor</h1>
             <div class="controls">
+                <input type="file" id="audioUpload" accept="audio/*">
+
+                <audio id="bgMusic" style="display:none;" preload="auto"></audio>
                 <input type="file" id="videoUpload" accept="video/*" multiple>
                 <button id="playAllBtn" style="background: #28a745; color: white;">▶ Timeline abspielen</button>
                 <button id="clearSessionBtn">Session löschen</button>
