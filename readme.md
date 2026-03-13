@@ -596,6 +596,31 @@ RESULT:
 ✅ Professionell (Musik-producer-fokussiert)
 
 
+13.03.2026 Konzept
+ideo-Editor Architektur: Hybrid-Sync
+Konzept:
+Das Live-Rendering erfolgt vollständig clientseitig via JavaScript. Die Performance wird durch eine Dual-Video-Strategie und intelligentes Caching sichergestellt.
 
+1. Dual-Video Handling
+Jedes Projekt nutzt zwei Versionen der Videodateien:
 
+Raw-Version: Das Original auf dem Server (Single Source of Truth).
+
+Live-Play-Version: Eine optimierte Kopie, die direkt beim Client liegt.
+
+Der Vorteil: Der Client holt sich die Videos einmalig. Danach greift das Browser-Caching: Ein GET-Request auf /uploads/ wird vom Browser instantan aus dem lokalen Cache beantwortet, statt die Datei neu zu laden.
+
+2. Client-Side Rendering Engine
+
+Engine: JavaScript steuert das Rendering live im Browser.
+
+Layer-Stack: Alle Clips der Timeline werden als simultane <video>-Layer übereinander geladen.
+
+Frame-Sync: Ein Master-Loop (requestAnimationFrame) toggelt die Sichtbarkeit (opacity) der Layer basierend auf dem globalen Timehead. Dies eliminiert Umschaltpausen ("Gaps").
+
+3. Timeline & Synchronisation
+
+Zustand: Eine JSON-Struktur beschreibt die Timeline (Welches Video? Welche Sekunde? Welcher Pfad?).
+
+Synchronität: Diese Metadaten werden permanent zwischen Client und Server abgeglichen. So bleibt die Bearbeitung über Sessions hinweg konsistent, während das schwere Videomaterial lokal gecached bleibt.
 

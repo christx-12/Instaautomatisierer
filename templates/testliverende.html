@@ -1,44 +1,84 @@
-<img id="video" />
-<audio id="audio" controls>
-  <source src="{{ url_for('static', filename='music.mp3') }}" type="audio/mpeg">
-</audio>
-<button id="playBtn">Play</button>
-<button id="pauseBtn">Pause</button>
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Video Editor - Seamless</title>
+    <style>
+        /* Grundlayout */
+        body { font-family: sans-serif; background: #1a1a1a; color: white; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        
+        /* Die Player-Sektion: Hier liegt der Trick */
+        .player-wrapper {
+            position: relative;
+            width: 640px;
+            height: 360px;
+            background: #000;
+            margin: 0 auto;
+            border: 2px solid #333;
+            overflow: hidden;
+        }
 
-<script>
-const img = document.getElementById('video');
-const audio = document.getElementById('audio');
+        /* Beide Player belegen denselben Platz */
+        .video-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            transition: opacity 0.3s ease; /* Optional: Weicher Übergang */
+        }
 
-// Video-Client
-const wsVideo = new WebSocket("ws://localhost:8299");
-wsVideo.onopen = () => {
-  wsVideo.send(JSON.stringify({ role: "video" }));
-};
-wsVideo.onmessage = (event) => {
-  img.src = 'data:image/jpeg;base64,' + event.data;
-};
+        /* UI Controls */
+        .controls { margin: 15px 0; display: flex; gap: 10px; justify-content: center; }
+        button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; }
+        #playAllBtn { background: #28a745; color: white; }
+        #clearSessionBtn { background: #dc3545; color: white; }
+        
+        /* Timeline Styling */
+        .timeline-section { margin-top: 30px; background: #2a2a2a; padding: 20px; border-radius: 8px; }
+        .timeline-container { display: flex; gap: 10px; overflow-x: auto; padding: 10px 0; min-height: 100px; }
+        .timeline-clip {
+            min-width: 150px;
+            background: #3d3d3d;
+            padding: 10px;
+            border-radius: 4px;
+            border-left: 4px solid #007bff;
+            cursor: pointer;
+        }
+        .timeline-clip input { width: 50px; background: #1a1a1a; color: white; border: 1px solid #555; }
+        #playerStatus { text-align: center; color: #aaa; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Cloud Editor Pro</h1>
+            <div class="controls">
+                <input type="file" id="videoUpload" accept="video/*" multiple>
+                <button id="playAllBtn">▶ Timeline abspielen</button>
+                <button id="clearSessionBtn">Session löschen</button>
+            </div>
+        </header>
 
-// Control-Client
-const wsCtrl = new WebSocket("ws://localhost:8299");
-wsCtrl.onopen = () => {
-  wsCtrl.send(JSON.stringify({ role: "control" }));
-};
+        <main>
+            <div class="player-wrapper">
+                <video id="playerA" class="video-layer" muted></video>
+                <video id="playerB" class="video-layer" muted style="opacity: 0;"></video>
+            </div>
+            <p id="playerStatus">Warte auf Input...</p>
 
-function sendState() {
-  if (wsCtrl.readyState !== WebSocket.OPEN) return;
-  wsCtrl.send(JSON.stringify({
-    role: "control",    // wird im Handler ignoriert, ist aber ok
-    t: audio.currentTime,
-    playing: !audio.paused
-  }));
-}
+            <div class="timeline-section">
+                <h3>Timeline Sequenz</h3>
+                <div id="timeline" class="timeline-container">
+                    </div>
+            </div>
+        </main>
+    </div>
 
-setInterval(sendState, 40);
-
-document.getElementById('playBtn').onclick = () => audio.play();
-document.getElementById('pauseBtn').onclick = () => audio.pause();
-
-audio.addEventListener('seeked', sendState);
-audio.addEventListener('play', sendState);
-audio.addEventListener('pause', sendState);
-</script>
+    <script src="/static/script.js"></script>
+</body>
+</html>
