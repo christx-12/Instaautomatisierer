@@ -61,23 +61,67 @@ header {
 
 .timeline-clip {
     background: #444;
-    padding: 10px;
+    padding: 15px;  /* Etwas mehr Platz für 2 Inputs */
     border-radius: 4px;
     cursor: pointer;
-    min-width: 140px;
+    min-width: 160px;  /* Etwas breiter */
+    min-height: 90px;
     text-align: center;
     border: 2px solid transparent;
 }
 
 .timeline-clip input {
-    width: 50px;
+    width: 60px;  /* Etwas breiter für bessere Bedienung */
     background: #222;
     color: white;
     border: 1px solid #555;
     text-align: center;
+    margin: 2px 0;
 }
+
 
 .timeline-clip.active-clip {
     border-color: #007bff;
     background: #555;
+}
+.timeline-clip {
+    /* ... dein bisheriger Code ... */
+    cursor: grab;
+    user-select: none;
+    position: relative;  /* Für den Delete-Button */
+}
+
+.timeline-clip.dragging {
+    opacity: 0.4;
+    cursor: grabbing;
+}
+
+.timeline-clip.drag-over {
+    border-color: #ff9800;
+    background: #555;
+    transform: scale(1.03);
+    transition: transform 0.1s ease;
+}
+
+.delete-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: #c0392b;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    width: 18px;
+    height: 18px;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.delete-btn:hover {
+    background: #e74c3c;
 }

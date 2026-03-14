@@ -90,31 +90,103 @@ async function uploadFile(file, tempId, endpoint) {
     } catch (error) { console.error("Upload Fehler:", error); }
 }
 
-// 3. UI Rendering
+let draggedIndex = null;
+
 function renderTimeline() {
     if (!timelineContainer || !playerWrapper) return;
     timelineContainer.innerHTML = '';
-    playerWrapper.innerHTML = ''; 
-    
+    playerWrapper.innerHTML = '';
+
     timelineState.forEach((clip, index) => {
+        // Video-Layer (unverändert)
         const video = document.createElement('video');
         video.className = 'video-layer';
         video.id = `video-element-${index}`;
         video.src = clip.localUrl || clip.serverUrl;
-        video.style.opacity = '0'; 
+        video.style.opacity = '0';
         video.style.zIndex = index;
-        video.muted = true; // Videos stumm, damit man die Musik hört
-        video.preload = "auto";
+        video.muted = true;
+        video.preload = 'auto';
         playerWrapper.appendChild(video);
 
+        // Timeline-Clip
         const div = document.createElement('div');
         div.className = 'timeline-clip';
-        div.innerHTML = `<strong>${clip.name}</strong><br>
-            <input type="number" value="${clip.duration}" min="1" 
-            onchange="updateDuration(${index}, this.value)"> s`;
-        div.onclick = (e) => { if(e.target.tagName !== 'INPUT') startPlayback(); };
+        div.draggable = true;
+        div.dataset.index = index;
+
+        div.innerHTML = `
+            <button class="delete-btn" title="Clip löschen">✕</button>
+            <strong>${clip.name}</strong><br>
+            <input type="number" value="${clip.duration}" min="1"
+                onchange="updateDuration(${index}, this.value)"> s
+        `;
+
+        // --- Drag Events ---
+        div.addEventListener('dragstart', (e) => {
+            draggedIndex = index;
+            e.dataTransfer.effectAllowed = 'move';
+            // Kurze Verzögerung, damit der Browser das Ghost-Bild rendert
+            setTimeout(() => div.classList.add('dragging'), 0);
+        });
+
+        div.addEventListener('dragend', () => {
+            div.classList.remove('dragging');
+            document.querySelectorAll('.timeline-clip').forEach(c => c.classList.remove('drag-over'));
+            draggedIndex = null;
+        });
+
+        div.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (draggedIndex !== null && draggedIndex !== index) {
+                document.querySelectorAll('.timeline-clip').forEach(c => c.classList.remove('drag-over'));
+                div.classList.add('drag-over');
+            }
+        });
+
+        div.addEventListener('dragleave', () => {
+            div.classList.remove('drag-over');
+        });
+
+        div.addEventListener('drop', (e) => {
+            e.preventDefault();
+            if (draggedIndex === null || draggedIndex === index) return;
+
+            // Array neu ordnen
+            const moved = timelineState.splice(draggedIndex, 1)[0];
+            timelineState.splice(index, 0, moved);
+
+            stopPlayback();
+            renderTimeline();
+            syncState();
+        });
+
+        // --- Löschen ---
+        div.querySelector('.delete-btn').addEventListener('click', (e) => {
+            e.stopPropagation(); // Verhindert Klick auf den Clip selbst
+            deleteClip(index);
+        });
+
+        // Klick auf Clip = Playback (nur wenn kein Input/Button getroffen)
+        div.addEventListener('click', (e) => {
+            if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
+                startPlayback();
+            }
+        });
+
         timelineContainer.appendChild(div);
     });
+}
+
+function deleteClip(index) {
+    stopPlayback();
+    timelineState.splice(index, 1);  // Aus Array entfernen
+    renderTimeline();
+    syncState();
+    playerStatus.innerText = timelineState.length === 0
+        ? "Alle Clips gelöscht"
+        : `Clip gelöscht – ${timelineState.length} verbleibend`;
 }
 
 // 4. Der Master-Loop (mit Audio-Sync)
