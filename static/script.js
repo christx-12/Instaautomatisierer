@@ -3,6 +3,7 @@ let isPlaying = false;
 let globalStartTime = 0;
 let playbackRequest;
 let audioUrl = null; // Neu: Speicher für den Musik-Track
+let globalBarLength = null; // Neu: Taktlänge der Musik
 
 // DOM Elemente
 const playerWrapper = document.getElementById('videoEngine') || document.querySelector('.player-wrapper');
@@ -26,6 +27,9 @@ async function init() {
             audioUrl = data.audioUrl;
             bgMusic.src = audioUrl;
         }
+        if (data.barLength) {
+            globalBarLength = data.barLength;
+        }
     } catch (e) { console.error("Fehler beim Laden:", e); }
 }
 
@@ -42,7 +46,7 @@ if (fileInput) {
                 name: file.name,
                 localUrl: URL.createObjectURL(file),
                 serverUrl: null,
-                duration: 5,
+                duration: globalBarLength ? Number(globalBarLength.toFixed(2)) : 5,
                 status: 'uploading'
             };
             timelineState.push(newClip);
@@ -69,7 +73,13 @@ if (audioInput) {
         try {
             const res = await fetch('/upload-audio', { method: 'POST', body: formData });
             const data = await res.json();
-            console.log("Audio auf Server gespeichert:", data.serverUrl);
+            console.log("Audio auf Server gespeichert:", data.serverUrl, "Bar Length:", data.barLength);
+            
+            // Taktlänge speichern und synchronisieren
+            if (data.barLength) {
+                globalBarLength = data.barLength;
+                syncState();
+            }
         } catch (err) { console.error("Audio Upload Fehler:", err); }
     };
 }
@@ -275,7 +285,7 @@ async function syncState() {
     await fetch('/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ timeline: stateToSync, audioUrl: audioUrl })
+        body: JSON.stringify({ timeline: stateToSync, audioUrl: audioUrl, barLength: globalBarLength })
     });
 }
 
@@ -285,6 +295,7 @@ document.getElementById('clearSessionBtn').onclick = async () => {
     stopPlayback();
     timelineState = [];
     audioUrl = null;
+    globalBarLength = null;
     bgMusic.src = "";
     await syncState();
     renderTimeline();

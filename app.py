@@ -2,6 +2,10 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 import os
 import json
 import uuid
+import sys
+
+# Importiere die eigens erstellte musicAnalyzer Klasse
+from modules.musicAnalyzer import musicAnalyzer
 
 app = Flask(__name__)
 
@@ -57,6 +61,41 @@ def sync_timeline():
     data = request.json
     save_db(data)
     return jsonify({"status": "success"})
+
+# 2.5. Audio hochladen und analysieren
+@app.route('/upload-audio', methods=['POST'])
+def upload_audio():
+    if 'audio' not in request.files:
+        return jsonify({"error": "Kein Audio gefunden"}), 400
+    
+    file = request.files['audio']
+    if file.filename == '':
+        return jsonify({"error": "Leerer Dateiname"}), 400
+
+    ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'mp3'
+    filename = f"audio_{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    
+    file.save(filepath)
+    
+    server_url = f"/uploads/{filename}"
+    
+    # Track analysieren
+    try:
+        analyzer = musicAnalyzer(filepath)
+        bar_length = analyzer.get_bar_time()
+        try:
+            bar_length = float(bar_length[0])
+        except (TypeError, IndexError):
+            bar_length = float(bar_length)
+    except Exception as e:
+        print(f"Fehler bei Audio-Analyse: {e}")
+        bar_length = 5.0 # Fallback
+        
+    return jsonify({
+        "serverUrl": server_url,
+        "barLength": bar_length
+    })
 
 # 3. Timeline Status laden
 @app.route('/load', methods=['GET'])
