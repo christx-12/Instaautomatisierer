@@ -112,6 +112,9 @@ def uploaded_file(filename):
     # Caching für nahtloses Abspielen beim zweiten Mal
     response.headers['Cache-Control'] = 'public, max-age=86400'
     return response
+@app.route('/editor')
+def editor():
+    return render_template('editor.html')  # deine bisherige index.html
 
 if __name__ == '__main__':
     # Debug-Modus hilft beim Entwickeln
