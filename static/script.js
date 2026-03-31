@@ -2,16 +2,18 @@ let timelineState = [];
 let isPlaying = false;
 let globalStartTime = 0;
 let playbackRequest;
-let audioUrl = null; // Neu: Speicher für den Musik-Track
-let globalBarLength = null; // Neu: Taktlänge der Musik
+let audioUrl = null;
+let globalBarLength = null;
 
 // DOM Elemente
 const playerWrapper = document.getElementById('videoEngine') || document.querySelector('.player-wrapper');
 const timelineContainer = document.getElementById('timeline');
 const playerStatus = document.getElementById('playerStatus');
 const fileInput = document.getElementById('videoUpload');
-const audioInput = document.getElementById('audioUpload'); // Neu: Musik Input
-const bgMusic = document.getElementById('bgMusic'); // Neu: Audio Player
+const audioInput = document.getElementById('audioUpload');
+const bgMusic = document.getElementById('bgMusic');
+
+let draggedIndex = null;
 
 // 1. Initialisierung
 async function init() {
@@ -19,10 +21,16 @@ async function init() {
         const response = await fetch('/load');
         const data = await response.json();
         if (data.timeline) {
-            timelineState = data.timeline.map(clip => ({ ...clip, localUrl: null }));
+            timelineState = data.timeline.map(clip => {
+                const factor = clip.duration / (globalBarLength || 5);
+                return { 
+                    ...clip, 
+                    localUrl: null,
+                    durationFactor: isNaN(factor) ? 0.25 : Math.max(0.125, Math.min(0.5, factor))
+                };
+            });
             renderTimeline();
         }
-        // Falls der Server auch eine Audio-URL mitschickt:
         if (data.audioUrl) {
             audioUrl = data.audioUrl;
             bgMusic.src = audioUrl;
@@ -33,7 +41,7 @@ async function init() {
     } catch (e) { console.error("Fehler beim Laden:", e); }
 }
 
-// 2. Video & Audio Upload
+// 2. Video Upload
 if (fileInput) {
     fileInput.onchange = async (e) => {
         const files = e.target.files;
@@ -46,7 +54,8 @@ if (fileInput) {
                 name: file.name,
                 localUrl: URL.createObjectURL(file),
                 serverUrl: null,
-                duration: globalBarLength ? Number(globalBarLength.toFixed(2)) : 5,
+                duration: globalBarLength ? globalBarLength * 0.25 : 5, // Default: 1/4
+                durationFactor: 0.25,
                 status: 'uploading'
             };
             timelineState.push(newClip);
@@ -56,18 +65,16 @@ if (fileInput) {
     };
 }
 
-// NEU: Audio Upload Logik
+// Audio Upload Logik
 if (audioInput) {
     audioInput.onchange = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
 
-        // Lokale Vorschau sofort setzen
         audioUrl = URL.createObjectURL(file);
         bgMusic.src = audioUrl;
         playerStatus.innerText = `Musik geladen: ${file.name}`;
 
-        // Optional: Upload zum Server
         const formData = new FormData();
         formData.append('audio', file);
         try {
@@ -75,16 +82,19 @@ if (audioInput) {
             const data = await res.json();
             console.log("Audio auf Server gespeichert:", data.serverUrl, "Bar Length:", data.barLength);
             
-            // Taktlänge speichern und synchronisieren
             if (data.barLength) {
                 globalBarLength = data.barLength;
+                // Alle Clips mit neuer BarLength synchronisieren
+                timelineState.forEach(clip => {
+                    clip.duration = clip.durationFactor * globalBarLength;
+                });
                 syncState();
+                renderTimeline();
             }
         } catch (err) { console.error("Audio Upload Fehler:", err); }
     };
 }
 
-// Hilfsfunktion für Video-Upload (aus deinem alten Code extrahiert)
 async function uploadFile(file, tempId, endpoint) {
     const formData = new FormData();
     formData.append('video', file);
@@ -100,15 +110,13 @@ async function uploadFile(file, tempId, endpoint) {
     } catch (error) { console.error("Upload Fehler:", error); }
 }
 
-let draggedIndex = null;
-
 function renderTimeline() {
     if (!timelineContainer || !playerWrapper) return;
     timelineContainer.innerHTML = '';
     playerWrapper.innerHTML = '';
 
     timelineState.forEach((clip, index) => {
-        // Video-Layer (unverändert)
+        // Video-Layer
         const video = document.createElement('video');
         video.className = 'video-layer';
         video.id = `video-element-${index}`;
@@ -125,18 +133,31 @@ function renderTimeline() {
         div.draggable = true;
         div.dataset.index = index;
 
+        const factors = [
+            { value: 0.125, label: '1/8' },
+            { value: 0.25, label: '1/4' },
+            { value: 0.5, label: '1/2' }
+        ];
+
         div.innerHTML = `
             <button class="delete-btn" title="Clip löschen">✕</button>
             <strong>${clip.name}</strong><br>
-            <input type="number" value="${clip.duration}" min="1"
-                onchange="updateDuration(${index}, this.value)"> s
+            <div class="duration-options">
+                ${factors.map(f => `
+                    <label class="duration-label">
+                        <input type="radio" name="duration-${index}" value="${f.value}"
+                            ${clip.durationFactor === f.value ? 'checked' : ''}
+                            onchange="updateDuration(${index}, this.value)">
+                        ${f.label}
+                    </label>
+                `).join('')}
+            </div>
         `;
 
-        // --- Drag Events ---
+        // Drag Events
         div.addEventListener('dragstart', (e) => {
             draggedIndex = index;
             e.dataTransfer.effectAllowed = 'move';
-            // Kurze Verzögerung, damit der Browser das Ghost-Bild rendert
             setTimeout(() => div.classList.add('dragging'), 0);
         });
 
@@ -163,7 +184,6 @@ function renderTimeline() {
             e.preventDefault();
             if (draggedIndex === null || draggedIndex === index) return;
 
-            // Array neu ordnen
             const moved = timelineState.splice(draggedIndex, 1)[0];
             timelineState.splice(index, 0, moved);
 
@@ -172,13 +192,13 @@ function renderTimeline() {
             syncState();
         });
 
-        // --- Löschen ---
+        // Löschen
         div.querySelector('.delete-btn').addEventListener('click', (e) => {
-            e.stopPropagation(); // Verhindert Klick auf den Clip selbst
+            e.stopPropagation();
             deleteClip(index);
         });
 
-        // Klick auf Clip = Playback (nur wenn kein Input/Button getroffen)
+        // Klick = Playback
         div.addEventListener('click', (e) => {
             if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
                 startPlayback();
@@ -191,7 +211,7 @@ function renderTimeline() {
 
 function deleteClip(index) {
     stopPlayback();
-    timelineState.splice(index, 1);  // Aus Array entfernen
+    timelineState.splice(index, 1);
     renderTimeline();
     syncState();
     playerStatus.innerText = timelineState.length === 0
@@ -199,7 +219,14 @@ function deleteClip(index) {
         : `Clip gelöscht – ${timelineState.length} verbleibend`;
 }
 
-// 4. Der Master-Loop (mit Audio-Sync)
+function updateDuration(index, value) {
+    const factor = parseFloat(value);
+    timelineState[index].durationFactor = factor;
+    timelineState[index].duration = factor * globalBarLength-0.09;
+    syncState();
+    renderTimeline();
+}
+
 function playbackLoop() {
     if (!isPlaying) return;
 
@@ -207,7 +234,6 @@ function playbackLoop() {
     let currentTimelinePos = 0;
     let foundActive = false;
 
-    // Musik-Synchronisation prüfen (erzwingt Gleichlauf, falls Video/Audio driftet)
     if (audioUrl && Math.abs(bgMusic.currentTime - elapsed) > 0.2) {
         bgMusic.currentTime = elapsed;
     }
@@ -244,7 +270,6 @@ function playbackLoop() {
     }
 }
 
-// 5. Steuerung
 function startPlayback() {
     stopPlayback();
     if (timelineState.length === 0) return;
@@ -274,21 +299,20 @@ function stopPlayback() {
     });
 }
 
-// Restliche Funktionen (updateDuration, syncState, Buttons) bleiben gleich...
-function updateDuration(index, value) {
-    timelineState[index].duration = parseFloat(value);
-    syncState();
-}
-
 async function syncState() {
     const stateToSync = timelineState.map(({localUrl, ...rest}) => rest);
     await fetch('/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ timeline: stateToSync, audioUrl: audioUrl, barLength: globalBarLength })
+        body: JSON.stringify({ 
+            timeline: stateToSync, 
+            audioUrl: audioUrl, 
+            barLength: globalBarLength 
+        })
     });
 }
 
+// Buttons binden
 // Buttons binden
 document.getElementById('playAllBtn').onclick = startPlayback;
 document.getElementById('clearSessionBtn').onclick = async () => {
