@@ -472,10 +472,11 @@
   // ── Actions ──────────────────────────────────────────────────
   function startNew() {
     // Clear saved data, then go to editor
+    // NEU: Session komplett leeren (Timeline, Audio und Taktlänge)
     fetch('/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ timeline: [] })
+      body: JSON.stringify({ timeline: [], audioUrl: null, barLength: null })
     }).finally(() => {
       window.location.href = '/editor';
     });
@@ -484,7 +485,7 @@
   function loadSaved() {
     window.location.href = '/editor';
   }
-
+  
   // ── Init ─────────────────────────────────────────────────────
   checkSavedProject();
 </script>

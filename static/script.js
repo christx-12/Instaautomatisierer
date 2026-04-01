@@ -124,6 +124,7 @@ function normalizeClip(clip) {
     localUrl:       null,
     status:         clip.status || 'ready',
     durationFactor: isNaN(factor) ? 0.25 : Math.max(0.125, Math.min(0.5, factor)),
+    videoOffset:    clip.videoOffset || 0, // <--- NEU: Sorgt dafür, dass der Wert aus der DB/Session erhalten bleibt
   };
 }
 
@@ -141,6 +142,7 @@ const upload = {
         serverUrl:      null,
         duration:       clipDuration(0.25),
         durationFactor: 0.25,
+        videoOffset:    0, // <--- NEU: Hier merken wir uns den Startzeitpunkt
         status:         'uploading',
       };
       state.timeline.push(clip);
@@ -266,7 +268,13 @@ const timeline = {
           </button>`).join('')}
       </div>
       <div class="clip-footer">
-        <span class="clip-sec">${clip.duration ? clip.duration.toFixed(2) + 's' : '–'}</span>
+        <span class="clip-sec">
+          ${clip.durationFactor === 0.125 ? '⅛ Takt' : 
+            clip.durationFactor === 0.25 ? '¼ Takt' : 
+            clip.durationFactor === 0.5 ? '½ Takt' : 
+            (clip.duration ? clip.duration.toFixed(2) + 's' : '–')}
+        </span>
+        <button class="clip-trim" title="Startzeitpunkt setzen" aria-label="Trim">✂️</button>
         <button class="clip-delete" aria-label="Clip löschen" title="Löschen">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
@@ -325,6 +333,28 @@ const timeline = {
         e.stopPropagation();
         this.updateDuration(index, parseFloat(btn.dataset.val));
       });
+    });
+
+    // Startzeitpunkt (Trim) setzen
+    card.querySelector('.clip-trim').addEventListener('click', (e) => {
+      e.stopPropagation(); // Verhindert, dass der Clip beim Klicken abspielt
+      
+      const currentOffset = state.timeline[index].videoOffset || 0;
+      // Simples Eingabefenster (Prompt)
+      const input = prompt(`Ab welcher Sekunde soll das Video "${state.timeline[index].name}" starten?`, currentOffset);
+      
+      if (input !== null) {
+        // Kommas in Punkte umwandeln, falls der User z.B. "1,5" eingibt
+        const newOffset = parseFloat(input.replace(',', '.')); 
+        
+        if (!isNaN(newOffset) && newOffset >= 0) {
+          state.timeline[index].videoOffset = newOffset;
+          sync.save(); // Direkt auf dem Server/im Storage sichern
+          ui.toast(`Startzeit auf ${newOffset}s gesetzt`, 'ok');
+        } else {
+          ui.toast('Ungültige Eingabe (bitte nur Zahlen)', 'err');
+        }
+      }
     });
 
     // Löschen
@@ -428,7 +458,7 @@ const playback = {
       if (isActive) {
         if (video && video.style.opacity !== '1') {
           video.style.opacity = '1';
-          video.currentTime   = elapsed - start;
+          video.currentTime   = (elapsed - start) + (clip.videoOffset || 0);
           video.play().catch(() => {});
         }
         card?.classList.add('active-clip');
