@@ -644,6 +644,13 @@ const ui = {
         }
       });
     }
+
+    const musicVolumeSlider = document.getElementById('musicVolume');
+    if (musicVolumeSlider) {
+      musicVolumeSlider.addEventListener('input', (e) => {
+        dom.bgMusic().volume = parseFloat(e.target.value);
+      });
+    }
   },
 };
 

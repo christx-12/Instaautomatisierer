@@ -83,6 +83,19 @@
 
   <div class="topbar-spacer"></div>
 
+  <!-- Lautstärke (Volume) -->
+  <div style="display: flex; align-items: center; gap: 0.4rem; color: var(--text-muted); margin-right: 0.2rem;" title="Musik-Lautstärke im Editor">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+      <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+    </svg>
+    <input type="range" id="musicVolume" min="0" max="1" step="0.05" value="1" 
+           style="width: 60px; height: 4px; accent-color: var(--primary); cursor: pointer; border-radius: var(--r-full);">
+  </div>
+  
+  <div class="topbar-sep" style="margin-left: 0.5rem;"></div>
+
   <!-- Session löschen -->
   <button class="icon-btn" id="clearSessionBtn" title="Session löschen" aria-label="Session löschen">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
