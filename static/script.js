@@ -12,8 +12,12 @@ const playerStatus = document.getElementById('playerStatus');
 const fileInput = document.getElementById('videoUpload');
 const audioInput = document.getElementById('audioUpload');
 const bgMusic = document.getElementById('bgMusic');
+// Toggle-Button für Format-Wechsel eingebunden
+const formatToggleBtn = document.getElementById('formatToggleBtn');
 
 let draggedIndex = null;
+// Variable speichert das aktuell gewählte Format (16:9 oder 9:16)
+let isReelFormat = false;
 
 // 1. Initialisierung
 async function init() {
@@ -313,8 +317,22 @@ async function syncState() {
 }
 
 // Buttons binden
-// Buttons binden
 document.getElementById('playAllBtn').onclick = startPlayback;
+
+// Logik für den Format-Wechsel Button (16:9 <-> 9:16)
+if (formatToggleBtn) {
+    formatToggleBtn.onclick = () => {
+        isReelFormat = !isReelFormat; // Wechsel der Ansicht
+        if (isReelFormat) {
+            playerWrapper.classList.add('reel-format'); // Aktiviere 9:16 Layout
+            formatToggleBtn.innerText = "Format: 9:16 (Reel)";
+        } else {
+            playerWrapper.classList.remove('reel-format'); // Zurück zu 16:9 Layout
+            formatToggleBtn.innerText = "Format: 16:9";
+        }
+    };
+}
+
 document.getElementById('clearSessionBtn').onclick = async () => {
     stopPlayback();
     timelineState = [];

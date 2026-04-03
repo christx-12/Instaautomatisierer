@@ -28,7 +28,6 @@ header {
     text-align: center;
 }
 
-/* Wichtig für den Sync-Layer */
 .player-wrapper {
     position: relative;
     width: 640px;
@@ -36,6 +35,19 @@ header {
     background: #000;
     margin: 0 auto;
     overflow: hidden;
+    /* Weiche Animation beim Umschalten eingefügt */
+    transition: width 0.3s ease, height 0.3s ease;
+}
+
+/* Neue Klasse für das 9:16 Reel-Format */
+.player-wrapper.reel-format {
+    width: 360px;
+    height: 640px;
+}
+
+/* Sorgt dafür, dass Videos im Reel-Format das Bild ausfüllen */
+.player-wrapper.reel-format .video-layer {
+    object-fit: cover;
 }
 
 .video-layer {
