@@ -1,5 +1,5 @@
 /* =============================================================
-   CutFlow – script.js
+   CutFlow – script.js  (Performance-optimiert)
    Struktur:
      1. Config & Constants
      2. State
@@ -7,92 +7,134 @@
      4. Utils
      5. Init
      6. Upload: Video / Audio
-     7. Timeline: render, add, delete, reorder, updateDuration
+     7. Timeline: render, add, delete, clone, reorder, updateDuration
      8. Playback: start, stop, loop
      9. Sync
     10. UI helpers: toast, status, theme, keyboard, dropzone
    ============================================================= */
 
+
+
+
 /* ── 1. Config ──────────────────────────────────────────────── */
 const FACTORS = [
-  { value: 0.125, label: '⅛' },
-  { value: 0.25,  label: '¼'  },
-  { value: 0.5,   label: '½'  },
+  { value: 0.0625, label: '1/16' },
+  { value: 0.125,  label: '⅛'   },
+  { value: 0.25,   label: '¼'   },
+  { value: 0.5,    label: '½'   },
 ];
-const DEFAULT_BAR    = 5.0;   // Fallback-Taktlänge (s) wenn kein Audio analysiert
-const TRIM_OFFSET    = 0.09;  // Kleiner Puffer am Clip-Ende um hartes Schneiden zu vermeiden
-const AUDIO_DRIFT_MS = 0.25;  // Maximale Audio-Drift bevor re-sync (s)
+const DEFAULT_BAR    = 5.0;
+const TRIM_OFFSET    = 0.09;
+const AUDIO_DRIFT_MS = 0.25;
+const PLAYBACK_FPS   = 24;
+const PLAYBACK_INTERVAL = 1000 / PLAYBACK_FPS;
+
+// FIX: Lookahead-Zeit (in Sekunden) – nächster Clip wird vorab geseekt
+const PRELOAD_LOOKAHEAD = 0.08;
+// FIX: Toleranz am Sequenzende – ein Frame wird nicht als "kein Clip aktiv" gewertet
+const END_TOLERANCE = 1.5 / PLAYBACK_FPS;
+
+
+
 
 /* ── 2. State ───────────────────────────────────────────────── */
 const state = {
-  timeline:       [],   // Array<Clip>
-  audioUrl:       null, // blob: oder /uploads/…
-  barLength:      null, // erkannte Taktlänge in Sekunden
-  isPlaying:      false,
-  startTime:      0,    // Date.now() – Offset
-  rafHandle:      null,
-  draggedIndex:   null,
-  totalDuration:  0,
+  timeline:      [],
+  audioUrl:      null,
+  barLength:     null,
+  isPlaying:     false,
+  startTime:     0,
+  rafHandle:     null,
+  draggedIndex:  null,
+  totalDuration: 0,
 };
+
+
+
 
 /*
   Clip-Schema:
   {
-    id:             string,        // einmalige ID
-    name:           string,        // Dateiname
-    localUrl:       string|null,   // blob: URL (nur Browser-Session)
-    serverUrl:      string|null,   // /uploads/… (persistiert)
-    duration:       number,        // Sekunden (durationFactor * barLength – TRIM_OFFSET)
-    durationFactor: number,        // 0.125 | 0.25 | 0.5
+    id:             string,
+    name:           string,
+    localUrl:       string|null,
+    serverUrl:      string|null,
+    duration:       number,
+    durationFactor: number,
+    videoOffset:    number,
     status:         'uploading' | 'ready' | 'error',
   }
 */
 
+
+
+
 /* ── 3. DOM Refs ────────────────────────────────────────────── */
 const dom = {
-  videoEngine:   () => document.getElementById('videoEngine'),
-  timeline:      () => document.getElementById('timeline'),
-  tlDropzone:    () => document.getElementById('tlDropzone'),
-  bgMusic:       () => document.getElementById('bgMusic'),
-  playBtn:       () => document.getElementById('playAllBtn'),
-  playIcon:      () => document.getElementById('playIcon'),
-  playLabel:     () => document.getElementById('playLabel'),
-  statusText:    () => document.getElementById('statusText'),
-  statusPill:    () => document.getElementById('statusPill'),
-  progressBar:   () => document.getElementById('progressBar'),
-  timeOverlay:   () => document.getElementById('timeOverlay'),
-  clipCount:     () => document.getElementById('clipCount'),
-  barBadge:      () => document.getElementById('barBadgeText'),
-  previewEmpty:  () => document.getElementById('previewEmpty'),
-  audioBtnLabel: () => document.getElementById('audioBtnLabel'),
-  audioBtnText:  () => document.getElementById('audioBtnText'),
-  videoInput:    () => document.getElementById('videoUpload'),
-  audioInput:    () => document.getElementById('audioUpload'),
-  toastContainer:() => document.getElementById('toastContainer'),
-  clearBtn:      () => document.getElementById('clearSessionBtn'),
+  videoEngine:    () => document.getElementById('videoEngine'),
+  timeline:       () => document.getElementById('timeline'),
+  tlDropzone:     () => document.getElementById('tlDropzone'),
+  bgMusic:        () => document.getElementById('bgMusic'),
+  playBtn:        () => document.getElementById('playAllBtn'),
+  playIcon:       () => document.getElementById('playIcon'),
+  playLabel:      () => document.getElementById('playLabel'),
+  statusText:     () => document.getElementById('statusText'),
+  statusPill:     () => document.getElementById('statusPill'),
+  progressBar:    () => document.getElementById('progressBar'),
+  timeOverlay:    () => document.getElementById('timeOverlay'),
+  clipCount:      () => document.getElementById('clipCount'),
+  barBadge:       () => document.getElementById('barBadgeText'),
+  previewEmpty:   () => document.getElementById('previewEmpty'),
+  audioBtnLabel:  () => document.getElementById('audioBtnLabel'),
+  audioBtnText:   () => document.getElementById('audioBtnText'),
+  videoInput:     () => document.getElementById('videoUpload'),
+  audioInput:     () => document.getElementById('audioUpload'),
+  toastContainer: () => document.getElementById('toastContainer'),
+  clearBtn:       () => document.getElementById('clearSessionBtn'),
 };
+
+
+
 
 /* ── 4. Utils ───────────────────────────────────────────────── */
 const uid = () => 'clip-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+
 
 function fmtTime(s) {
   if (s < 60) return s.toFixed(2) + 's';
   return `${Math.floor(s / 60)}m ${(s % 60).toFixed(1)}s`;
 }
 
+
 function calcTotal() {
   state.totalDuration = state.timeline.reduce((acc, c) => acc + (c.duration || 0), 0);
 }
 
+
 function clipDuration(factor) {
   return factor * (state.barLength || DEFAULT_BAR) - TRIM_OFFSET;
 }
+
+
+function factorLabel(factor) {
+  switch (factor) {
+    case 0.0625: return '1/16 Takt';
+    case 0.125:  return '⅛ Takt';
+    case 0.25:   return '¼ Takt';
+    case 0.5:    return '½ Takt';
+    default:     return factor + ' Takt';
+  }
+}
+
+
+
 
 /* ── 5. Init ────────────────────────────────────────────────── */
 async function init() {
   try {
     const res  = await fetch('/load');
     const data = await res.json();
+
 
     if (data.barLength) {
       state.barLength = data.barLength;
@@ -115,7 +157,7 @@ async function init() {
   ui.updateEmptyState();
 }
 
-/** Stellt sicher, dass geladene Clips alle Pflichtfelder haben */
+
 function normalizeClip(clip) {
   const factor = clip.durationFactor
     || (clip.duration / (state.barLength || DEFAULT_BAR));
@@ -123,15 +165,18 @@ function normalizeClip(clip) {
     ...clip,
     localUrl:       null,
     status:         clip.status || 'ready',
-    durationFactor: isNaN(factor) ? 0.25 : Math.max(0.125, Math.min(0.5, factor)),
-    videoOffset:    clip.videoOffset || 0, // <--- NEU: Sorgt dafür, dass der Wert aus der DB/Session erhalten bleibt
+    durationFactor: isNaN(factor) ? 0.25 : Math.max(0.0625, Math.min(0.5, factor)),
+    videoOffset:    clip.videoOffset || 0,
   };
 }
+
+
+
 
 /* ── 6. Upload ──────────────────────────────────────────────── */
 const upload = {
 
-  /** Mehrere Video-Dateien einstellen */
+
   handleVideoFiles(files) {
     for (const file of files) {
       if (!file.type.startsWith('video/')) continue;
@@ -142,7 +187,7 @@ const upload = {
         serverUrl:      null,
         duration:       clipDuration(0.25),
         durationFactor: 0.25,
-        videoOffset:    0, // <--- NEU: Hier merken wir uns den Startzeitpunkt
+        videoOffset:    0,
         status:         'uploading',
       };
       state.timeline.push(clip);
@@ -151,6 +196,7 @@ const upload = {
       this._uploadVideo(file, clip.id);
     }
   },
+
 
   async _uploadVideo(file, id) {
     const fd = new FormData();
@@ -162,23 +208,28 @@ const upload = {
       if (clip) {
         clip.serverUrl = data.serverUrl;
         clip.status    = 'ready';
-        timeline.render();
+        timeline._patchCardStatus(id);
         sync.save();
       }
       ui.toast(`"${file.name.substr(0, 18)}" hochgeladen`, 'ok');
     } catch {
       const clip = state.timeline.find(c => c.id === id);
-      if (clip) { clip.status = 'error'; timeline.render(); }
+      if (clip) {
+        clip.status = 'error';
+        timeline._patchCardStatus(id);
+      }
       ui.toast('Upload fehlgeschlagen', 'err');
     }
   },
 
+
   async handleAudioFile(file) {
     if (!file) return;
-    state.audioUrl   = URL.createObjectURL(file);
+    state.audioUrl    = URL.createObjectURL(file);
     dom.bgMusic().src = state.audioUrl;
     ui.markAudioLoaded(file.name);
     ui.setStatus('Audio wird analysiert…', true);
+
 
     const fd = new FormData();
     fd.append('audio', file);
@@ -186,14 +237,14 @@ const upload = {
       const res  = await fetch('/upload-audio', { method: 'POST', body: fd });
       const data = await res.json();
 
-      if (data.serverUrl) state.audioUrl = data.serverUrl; // Server-URL bevorzugen
+
+      if (data.serverUrl) state.audioUrl = data.serverUrl;
       if (data.barLength) {
         state.barLength = data.barLength;
         ui.updateBarBadge();
-        // Clip-Dauern an neue Bar-Länge anpassen
         state.timeline.forEach(c => { c.duration = clipDuration(c.durationFactor); });
         calcTotal();
-        timeline.render();
+        timeline._patchAllDurations();
         sync.save();
         ui.toast(`Takt erkannt: ${state.barLength.toFixed(2)}s`, 'ok');
       }
@@ -205,26 +256,67 @@ const upload = {
   },
 };
 
+
+
+
 /* ── 7. Timeline ────────────────────────────────────────────── */
 const timeline = {
+
 
   render() {
     calcTotal();
     dom.clipCount().textContent = state.timeline.length;
 
-    // Alle clip-cards entfernen, Dropzone bleibt
+
     dom.timeline().querySelectorAll('.clip-card').forEach(el => el.remove());
-    // Alle video-layer im Engine entfernen und neu aufbauen
     dom.videoEngine().querySelectorAll('.video-layer').forEach(el => el.remove());
+
+
+    const fragment = document.createDocumentFragment();
+
 
     state.timeline.forEach((clip, i) => {
       this._addVideoLayer(clip, i);
-      const card = this._createCard(clip, i);
-      dom.timeline().insertBefore(card, dom.tlDropzone());
+      fragment.appendChild(this._createCard(clip, i));
+    });
+
+
+    dom.timeline().insertBefore(fragment, dom.tlDropzone());
+  },
+
+
+  _patchCardStatus(id) {
+    const index = state.timeline.findIndex(c => c.id === id);
+    if (index === -1) return;
+    const clip = state.timeline[index];
+    const card = dom.timeline().querySelectorAll('.clip-card')[index];
+    if (!card) return;
+
+
+    card.classList.toggle('uploading', clip.status === 'uploading');
+    const existingOverlay = card.querySelector('.clip-thumb-overlay');
+    if (clip.status !== 'uploading' && existingOverlay) {
+      existingOverlay.remove();
+    } else if (clip.status === 'uploading' && !existingOverlay) {
+      const overlay = document.createElement('div');
+      overlay.className = 'clip-thumb-overlay';
+      overlay.innerHTML = '<div class="spinner"></div>';
+      card.querySelector('.clip-thumb')?.appendChild(overlay);
+    }
+  },
+
+
+  _patchAllDurations() {
+    const cards = dom.timeline().querySelectorAll('.clip-card');
+    state.timeline.forEach((clip, i) => {
+      const card = cards[i];
+      if (!card) return;
+      const secEl = card.querySelector('.clip-sec');
+      if (secEl) secEl.textContent = factorLabel(clip.durationFactor);
     });
   },
 
-  /** Versteckter Video-Layer im Preview-Engine */
+
   _addVideoLayer(clip, index) {
     const v = document.createElement('video');
     v.id          = `vl-${index}`;
@@ -233,13 +325,14 @@ const timeline = {
     v.muted       = true;
     v.preload     = 'auto';
     v.playsInline = true;
-    v.style.opacity  = '0';
-    v.style.zIndex   = index;
+    v.style.opacity    = '0';
+    v.style.transition = 'opacity 0.06s linear';   // FIX: sanfter Crossfade statt harter Schnitt
+    v.style.zIndex     = index;
     dom.videoEngine().appendChild(v);
     return v;
   },
 
-  /** Clip-Karte mit Thumbnail, Dauer-Buttons, Löschen */
+
   _createCard(clip, index) {
     const card = document.createElement('div');
     card.className   = 'clip-card' + (clip.status === 'uploading' ? ' uploading' : '');
@@ -249,11 +342,15 @@ const timeline = {
     card.setAttribute('tabindex', '0');
     card.setAttribute('aria-label', `Clip ${index + 1}: ${clip.name}`);
 
+
+    const thumbSrc = clip.localUrl || clip.serverUrl || '';
+
+
     card.innerHTML = `
       <div class="drag-handle" aria-hidden="true"></div>
       <div class="clip-thumb">
-        <video src="${clip.localUrl || clip.serverUrl || ''}"
-               muted preload="metadata"
+        <video data-src="${thumbSrc}"
+               muted preload="none"
                style="width:100%;height:100%;object-fit:cover;"></video>
         ${clip.status === 'uploading'
           ? '<div class="clip-thumb-overlay"><div class="spinner"></div></div>'
@@ -268,13 +365,15 @@ const timeline = {
           </button>`).join('')}
       </div>
       <div class="clip-footer">
-        <span class="clip-sec">
-          ${clip.durationFactor === 0.125 ? '⅛ Takt' : 
-            clip.durationFactor === 0.25 ? '¼ Takt' : 
-            clip.durationFactor === 0.5 ? '½ Takt' : 
-            (clip.duration ? clip.duration.toFixed(2) + 's' : '–')}
-        </span>
+        <span class="clip-sec">${factorLabel(clip.durationFactor)}</span>
         <button class="clip-trim" title="Startzeitpunkt setzen" aria-label="Trim">✂️</button>
+        <button class="clip-clone" title="Clip duplizieren" aria-label="Clip klonen">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+        </button>
         <button class="clip-delete" aria-label="Clip löschen" title="Löschen">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
@@ -283,12 +382,25 @@ const timeline = {
         </button>
       </div>`;
 
+
+    const thumbVideo = card.querySelector('.clip-thumb video');
+    if (thumbVideo) {
+      const obs = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting) {
+          thumbVideo.src = thumbVideo.dataset.src;
+          obs.disconnect();
+        }
+      }, { rootMargin: '100px' });
+      obs.observe(thumbVideo);
+    }
+
+
     this._bindCardEvents(card, index);
     return card;
   },
 
+
   _bindCardEvents(card, index) {
-    // Drag & Drop
     card.addEventListener('dragstart', () => {
       state.draggedIndex = index;
       card.dataset.effectAllowed = 'move';
@@ -318,16 +430,21 @@ const timeline = {
       sync.save();
     });
 
-    // Klick: Abspielen ab diesem Clip (ignoriert bei Buttons)
+
     card.addEventListener('click', (e) => {
-      if (e.target.closest('.clip-delete') || e.target.closest('.dur-btn')) return;
+      if (
+        e.target.closest('.clip-delete') ||
+        e.target.closest('.dur-btn')     ||
+        e.target.closest('.clip-clone')  ||
+        e.target.closest('.clip-trim')
+      ) return;
       playback.start(index);
     });
     card.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playback.start(index); }
     });
 
-    // Dauer-Buttons
+
     card.querySelectorAll('.dur-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -335,21 +452,19 @@ const timeline = {
       });
     });
 
-    // Startzeitpunkt (Trim) setzen
+
     card.querySelector('.clip-trim').addEventListener('click', (e) => {
-      e.stopPropagation(); // Verhindert, dass der Clip beim Klicken abspielt
-      
+      e.stopPropagation();
       const currentOffset = state.timeline[index].videoOffset || 0;
-      // Simples Eingabefenster (Prompt)
-      const input = prompt(`Ab welcher Sekunde soll das Video "${state.timeline[index].name}" starten?`, currentOffset);
-      
+      const input = prompt(
+        `Ab welcher Sekunde soll das Video "${state.timeline[index].name}" starten?`,
+        currentOffset
+      );
       if (input !== null) {
-        // Kommas in Punkte umwandeln, falls der User z.B. "1,5" eingibt
-        const newOffset = parseFloat(input.replace(',', '.')); 
-        
+        const newOffset = parseFloat(input.replace(',', '.'));
         if (!isNaN(newOffset) && newOffset >= 0) {
           state.timeline[index].videoOffset = newOffset;
-          sync.save(); // Direkt auf dem Server/im Storage sichern
+          sync.save();
           ui.toast(`Startzeit auf ${newOffset}s gesetzt`, 'ok');
         } else {
           ui.toast('Ungültige Eingabe (bitte nur Zahlen)', 'err');
@@ -357,20 +472,52 @@ const timeline = {
       }
     });
 
-    // Löschen
+
+    card.querySelector('.clip-clone').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.clone(index);
+    });
+
+
     card.querySelector('.clip-delete').addEventListener('click', (e) => {
       e.stopPropagation();
       this.remove(index);
     });
   },
 
+
   updateDuration(index, factor) {
-    state.timeline[index].durationFactor = factor;
-    state.timeline[index].duration       = clipDuration(factor);
+    const clip = state.timeline[index];
+    clip.durationFactor = factor;
+    clip.duration       = clipDuration(factor);
     calcTotal();
     sync.save();
-    this.render();
+
+
+    const card = dom.timeline().querySelectorAll('.clip-card')[index];
+    if (!card) return;
+    card.querySelectorAll('.dur-btn').forEach(btn => {
+      btn.classList.toggle('selected', parseFloat(btn.dataset.val) === factor);
+    });
+    const secEl = card.querySelector('.clip-sec');
+    if (secEl) secEl.textContent = factorLabel(factor);
   },
+
+
+  clone(index) {
+    const original = state.timeline[index];
+    const cloned = {
+      ...original,
+      id:      uid(),
+      name:    original.name.replace(/(\.[^.]+)$/, '_copy$1'),
+      localUrl: original.localUrl,
+    };
+    state.timeline.splice(index + 1, 0, cloned);
+    this.render();
+    sync.save();
+    ui.toast(`"${original.name.substr(0, 18)}" geklont`, 'ok');
+  },
+
 
   remove(index) {
     playback.stop();
@@ -382,59 +529,96 @@ const timeline = {
   },
 };
 
+
+
+
 /* ── 8. Playback ────────────────────────────────────────────── */
 const playback = {
 
-  /**
-   * @param {number} fromIndex  - Clip-Index ab dem abgespielt wird (default: 0)
-   */
+
+  _cards:  [],
+  _videos: [],
+  _lastFrameTime:   0,
+  _lastActiveIndex: -1,
+
+
   start(fromIndex = 0) {
     this.stop();
     if (!state.timeline.length) return;
 
-    // Start-Offset: Zeit bis zum gewählten Clip
+
     const offset = state.timeline
       .slice(0, fromIndex)
       .reduce((acc, c) => acc + (c.duration || 0), 0);
 
-    state.isPlaying  = true;
-    state.startTime  = Date.now() - offset * 1000;
+
+    state.isPlaying = true;
+    state.startTime = performance.now() - offset * 1000;
+
+
+    this._cards  = [...dom.timeline().querySelectorAll('.clip-card')];
+    this._videos = state.timeline.map((_, i) => document.getElementById(`vl-${i}`));
+    this._lastFrameTime   = 0;
+    this._lastActiveIndex = -1;
+
 
     ui.setPlayingState(true);
+
 
     const audio = dom.bgMusic();
     if (state.audioUrl) {
       audio.currentTime = offset;
-      audio.play().catch(() => {}); // Autoplay-Policy: ignorieren
+      audio.play().catch(() => {});
     }
+
 
     this._loop();
   },
+
 
   stop() {
     state.isPlaying = false;
     cancelAnimationFrame(state.rafHandle);
 
+
     dom.bgMusic().pause();
     document.querySelectorAll('.video-layer').forEach(v => { v.pause(); v.style.opacity = '0'; });
     document.querySelectorAll('.clip-card').forEach(c => c.classList.remove('active-clip'));
 
+
+    this._cards  = [];
+    this._videos = [];
+    this._lastActiveIndex = -1;
+
+
     ui.setPlayingState(false);
-    dom.progressBar().style.width = '0%';
+    dom.progressBar().style.width  = '0%';
     dom.timeOverlay().textContent  = '0.00s';
     ui.setStatus('Bereit', false);
   },
 
+
   _loop() {
     if (!state.isPlaying) return;
-    const elapsed = (Date.now() - state.startTime) / 1000;
+
+
+    const now     = performance.now();
+    const elapsed = (now - state.startTime) / 1000;
+
 
     this._syncAudio(elapsed);
     this._updateLayers(elapsed);
-    this._updateUI(elapsed);
+
+
+    if (now - this._lastFrameTime >= PLAYBACK_INTERVAL) {
+      this._lastFrameTime = now;
+      this._updateUI(elapsed);
+    }
+
 
     state.rafHandle = requestAnimationFrame(() => this._loop());
   },
+
 
   _syncAudio(elapsed) {
     const audio = dom.bgMusic();
@@ -443,40 +627,134 @@ const playback = {
     }
   },
 
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FIX: Nahtlose Übergänge zwischen Clips
+  //
+  //  Problem 1 – Lücke zwischen Clips:
+  //    elapsed kann durch RAF-Timing exakt auf der Grenze oder einen Frame
+  //    drüber liegen → kein Clip als aktiv erkannt → schwarzer Frame.
+  //    Fix: 1-Frame-Toleranz (END_TOLERANCE) am Sequenzende.
+  //
+  //  Problem 2 – Alten Clip zu früh pausiert:
+  //    prevVideo.pause() wurde sofort aufgerufen, bevor play() des neuen
+  //    Clips resolved hat → sichtbare Lücke.
+  //    Fix: pause() erst im .then()-Callback von play() aufrufen.
+  //
+  //  Problem 3 – play() ist async, neuer Clip braucht einen Frame:
+  //    Fix: Neuen Clip ZUERST auf opacity:1 setzen, dann alten ausblenden.
+  //
+  //  Problem 4 – Nächster Clip nicht vorgecacht:
+  //    Fix: PRELOAD_LOOKAHEAD-Sekunden vor Clipende wird der nächste Clip
+  //    bereits geseekt (aber unsichtbar), damit er beim Übergang sofort
+  //    bereit ist (readyState >= 2).
+  //
+  //  Problem 5 – Harter Schnitt sichtbar:
+  //    Fix: CSS transition 'opacity 0.06s linear' auf jedem video-layer
+  //    (gesetzt in _addVideoLayer) sorgt für weichen ~60ms Crossblend.
+  // ─────────────────────────────────────────────────────────────────────────
   _updateLayers(elapsed) {
-    let pos        = 0;
+    let pos         = 0;
     let foundActive = false;
 
-    state.timeline.forEach((clip, i) => {
+
+    for (let i = 0; i < state.timeline.length; i++) {
+      const clip  = state.timeline[i];
       const start = pos;
       const end   = pos + (clip.duration || 0);
-      const video = document.getElementById(`vl-${i}`);
-      const card  = dom.timeline().querySelectorAll('.clip-card')[i];
+      pos         = end;
 
       const isActive = elapsed >= start && elapsed < end;
 
-      if (isActive) {
-        if (video && video.style.opacity !== '1') {
-          video.style.opacity = '1';
-          video.currentTime   = (elapsed - start) + (clip.videoOffset || 0);
-          video.play().catch(() => {});
+
+      // FIX 4: Nächsten Clip 80ms vor seinem Start vorglühen (seek, aber unsichtbar)
+      if (!isActive && i > 0) {
+        const prevEnd = end - (clip.duration || 0); // == start
+        const isUpNext = elapsed >= start - PRELOAD_LOOKAHEAD && elapsed < start;
+        if (isUpNext) {
+          const nextVideo = this._videos[i];
+          if (nextVideo && nextVideo.style.opacity !== '1' && nextVideo.readyState >= 2) {
+            nextVideo.currentTime = clip.videoOffset || 0;
+          }
         }
+      }
+
+
+      if (!isActive) continue;
+
+      foundActive = true;
+      const video = this._videos[i];
+      const card  = this._cards[i];
+
+
+      // Neuen Clip aktivieren (nur einmal pro Clip-Wechsel)
+      if (video && video.style.opacity !== '1') {
+
+        // FIX 3: Erst neuen Clip einblenden …
+        video.style.opacity = '1';
+        video.currentTime   = (elapsed - start) + (clip.videoOffset || 0);
+
+
+        // … dann alten Clip ausblenden NACHDEM play() resolved hat
+        const prevIndex = this._lastActiveIndex;
+        const playPromise = video.play();
+
+        if (playPromise !== undefined) {
+          // FIX 2: pause() erst nach erfolgreichem play() des neuen Clips
+          playPromise
+            .then(() => {
+              if (prevIndex >= 0 && prevIndex !== i) {
+                const prevCard  = this._cards[prevIndex];
+                const prevVideo = this._videos[prevIndex];
+                prevCard?.classList.remove('active-clip');
+                if (prevVideo) {
+                  prevVideo.style.opacity = '0';
+                  // Verzögertes pause() nach dem CSS-Fade (60ms)
+                  setTimeout(() => prevVideo.pause(), 80);
+                }
+              }
+            })
+            .catch(() => {
+              // Autoplay blockiert – trotzdem aufräumen
+              if (prevIndex >= 0 && prevIndex !== i) {
+                const prevCard  = this._cards[prevIndex];
+                const prevVideo = this._videos[prevIndex];
+                prevCard?.classList.remove('active-clip');
+                if (prevVideo) { prevVideo.style.opacity = '0'; prevVideo.pause(); }
+              }
+            });
+        } else {
+          // Kein Promise (ältere Browser) – sofort aufräumen
+          if (prevIndex >= 0 && prevIndex !== i) {
+            const prevCard  = this._cards[prevIndex];
+            const prevVideo = this._videos[prevIndex];
+            prevCard?.classList.remove('active-clip');
+            if (prevVideo) { prevVideo.style.opacity = '0'; prevVideo.pause(); }
+          }
+        }
+      }
+
+
+      // Card-Highlight nur bei echtem Clip-Wechsel aktualisieren
+      if (this._lastActiveIndex !== i) {
         card?.classList.add('active-clip');
         card?.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' });
-        foundActive = true;
-      } else {
-        if (video && video.style.opacity !== '0') { video.style.opacity = '0'; video.pause(); }
-        card?.classList.remove('active-clip');
+        this._lastActiveIndex = i;
       }
-      pos = end;
-    });
+    }
+
 
     if (!foundActive) {
-      this.stop();
-      ui.setStatus('Ende erreicht', false);
-      dom.progressBar().style.width = '100%';
+      // FIX 1: Einen Frame Toleranz – kein sofortiger Stopp bei Timing-Ausreißern
+      if (elapsed >= state.totalDuration - END_TOLERANCE || elapsed > state.totalDuration) {
+        this.stop();
+        ui.setStatus('Ende erreicht', false);
+        dom.progressBar().style.width = '100%';
+      }
+      // Else: kurz keinen Clip gefunden → einfach weiter loopen
     }
   },
+
 
   _updateUI(elapsed) {
     if (!state.isPlaying) return;
@@ -488,11 +766,23 @@ const playback = {
   },
 };
 
+
+
+
 /* ── 9. Sync ────────────────────────────────────────────────── */
 const sync = {
-  async save() {
+  _timer: null,
+
+
+  save() {
+    clearTimeout(this._timer);
+    this._timer = setTimeout(() => this._flush(), 600);
+  },
+
+
+  async _flush() {
     const payload = {
-      timeline:  state.timeline.map(({ localUrl, ...rest }) => rest), // localUrl nicht persistieren
+      timeline:  state.timeline.map(({ localUrl, ...rest }) => rest),
       audioUrl:  state.audioUrl,
       barLength: state.barLength,
     };
@@ -508,8 +798,12 @@ const sync = {
   },
 };
 
+
+
+
 /* ── 10. UI Helpers ─────────────────────────────────────────── */
 const ui = {
+
 
   toast(msg, type = 'info') {
     const c = dom.toastContainer();
@@ -523,10 +817,12 @@ const ui = {
     }, 3200);
   },
 
+
   setStatus(msg, active = false) {
     dom.statusText().textContent = msg;
     dom.statusPill().classList.toggle('active', active);
   },
+
 
   updateBarBadge() {
     dom.barBadge().textContent = state.barLength
@@ -534,20 +830,22 @@ const ui = {
       : '–';
   },
 
+
   updateEmptyState() {
     dom.previewEmpty().style.opacity = state.timeline.length === 0 ? '1' : '0';
   },
 
+
   markAudioLoaded(nameOrUrl) {
-    const label = dom.audioBtnLabel();
-    const text  = dom.audioBtnText();
+    const label   = dom.audioBtnLabel();
+    const text    = dom.audioBtnText();
     label.classList.add('has-file');
-    // Kürze langen Dateinamen
     const display = typeof nameOrUrl === 'string' && nameOrUrl.length > 14
       ? nameOrUrl.substr(0, 12) + '…'
       : nameOrUrl;
     text.textContent = display;
   },
+
 
   setPlayingState(playing) {
     const btn   = dom.playBtn();
@@ -560,6 +858,7 @@ const ui = {
       : '<polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>';
   },
 
+
   initThemeToggle() {
     const btn  = document.querySelector('[data-theme-toggle]');
     const root = document.documentElement;
@@ -567,11 +866,13 @@ const ui = {
     root.setAttribute('data-theme', theme);
     setIcon();
 
+
     btn.addEventListener('click', () => {
       theme = theme === 'dark' ? 'light' : 'dark';
       root.setAttribute('data-theme', theme);
       setIcon();
     });
+
 
     function setIcon() {
       btn.innerHTML = theme === 'dark'
@@ -580,9 +881,10 @@ const ui = {
     }
   },
 
+
   initDropzone() {
     const dz = dom.tlDropzone();
-    dz.addEventListener('click', () => dom.videoInput().click());
+    dz.addEventListener('click',    () => dom.videoInput().click());
     dz.addEventListener('dragover',  (e) => { e.preventDefault(); dz.classList.add('drag-active'); });
     dz.addEventListener('dragleave', ()  => dz.classList.remove('drag-active'));
     dz.addEventListener('drop', (e) => {
@@ -592,6 +894,7 @@ const ui = {
     });
   },
 
+
   initKeyboard() {
     document.addEventListener('keydown', (e) => {
       const tag = e.target.tagName;
@@ -600,6 +903,7 @@ const ui = {
       if (e.key === 'Escape') playback.stop();
     });
   },
+
 
   initButtons() {
     dom.videoInput().addEventListener('change', (e) => {
@@ -616,18 +920,19 @@ const ui = {
     dom.clearBtn().addEventListener('click', async () => {
       if (!confirm('Session wirklich löschen?')) return;
       playback.stop();
-      state.timeline   = [];
-      state.audioUrl   = null;
-      state.barLength  = null;
+      state.timeline  = [];
+      state.audioUrl  = null;
+      state.barLength = null;
       dom.bgMusic().src = '';
       dom.audioBtnLabel().classList.remove('has-file');
       dom.audioBtnText().textContent = 'Audio';
       this.updateBarBadge();
       timeline.render();
-      await sync.save();
+      await sync._flush();
       this.updateEmptyState();
       this.toast('Session gelöscht', 'info');
     });
+
 
     const formatToggleBtn = document.getElementById('formatToggleBtn');
     let isReelFormat = false;
@@ -637,13 +942,14 @@ const ui = {
         const playerWrapper = dom.videoEngine();
         if (isReelFormat) {
           playerWrapper.classList.add('reel-format');
-          formatToggleBtn.innerText = "Format: 9:16 (Reel)";
+          formatToggleBtn.innerText = 'Format: 9:16 (Reel)';
         } else {
           playerWrapper.classList.remove('reel-format');
-          formatToggleBtn.innerText = "Format: 16:9";
+          formatToggleBtn.innerText = 'Format: 16:9';
         }
       });
     }
+
 
     const musicVolumeSlider = document.getElementById('musicVolume');
     if (musicVolumeSlider) {
@@ -653,6 +959,9 @@ const ui = {
     }
   },
 };
+
+
+
 
 /* ── Boot ───────────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
