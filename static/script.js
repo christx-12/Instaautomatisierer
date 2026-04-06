@@ -11,10 +11,8 @@
      8. Playback: start, stop, loop
      9. Sync
     10. UI helpers: toast, status, theme, keyboard, dropzone
+    11. Song Mode: Waveform, Scrubber, Frame-Marker
    ============================================================= */
-
-
-
 
 
 /* ── 1. Config ──────────────────────────────────────────────── */
@@ -30,14 +28,10 @@ const AUDIO_DRIFT_MS = 0.25;
 const PLAYBACK_FPS   = 24;
 const PLAYBACK_INTERVAL = 1000 / PLAYBACK_FPS;
 
-
-// FIX: Lookahead-Zeit (in Sekunden) – nächster Clip wird vorab geseekt
+// Lookahead-Zeit (in Sekunden) – nächster Clip wird vorab geseekt
 const PRELOAD_LOOKAHEAD = 0.08;
-// FIX: Toleranz am Sequenzende – ein Frame wird nicht als "kein Clip aktiv" gewertet
+// Toleranz am Sequenzende – ein Frame wird nicht als "kein Clip aktiv" gewertet
 const END_TOLERANCE = 1.5 / PLAYBACK_FPS;
-
-
-
 
 
 /* ── 2. State ───────────────────────────────────────────────── */
@@ -50,10 +44,13 @@ const state = {
   rafHandle:     null,
   draggedIndex:  null,
   totalDuration: 0,
+
+  // Song-Modus
+  songMode:      false,
+  songOffset:    0,       // Startzeitpunkt des Audiotracks in Sekunden
+  frameTimes:    [],      // erlaubte Einsteige vom Server
+  audioBuffer:   null,    // dekodierter AudioBuffer fuer Waveform
 };
-
-
-
 
 
 /*
@@ -69,9 +66,6 @@ const state = {
     status:         'uploading' | 'ready' | 'error',
   }
 */
-
-
-
 
 
 /* ── 3. DOM Refs ────────────────────────────────────────────── */
@@ -99,45 +93,31 @@ const dom = {
 };
 
 
-
-
-
 /* ── 4. Utils ───────────────────────────────────────────────── */
 const uid = () => 'clip-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-
-
 
 function fmtTime(s) {
   if (s < 60) return s.toFixed(2) + 's';
   return `${Math.floor(s / 60)}m ${(s % 60).toFixed(1)}s`;
 }
 
-
-
 function calcTotal() {
   state.totalDuration = state.timeline.reduce((acc, c) => acc + (c.duration || 0), 0);
 }
-
-
 
 function clipDuration(factor) {
   return factor * (state.barLength || DEFAULT_BAR) - TRIM_OFFSET;
 }
 
-
-
 function factorLabel(factor) {
   switch (factor) {
     case 0.0625: return '1/16 Takt';
-    case 0.125:  return '⅛ Takt';
-    case 0.25:   return '¼ Takt';
-    case 0.5:    return '½ Takt';
+    case 0.125:  return '1/8 Takt';
+    case 0.25:   return '1/4 Takt';
+    case 0.5:    return '1/2 Takt';
     default:     return factor + ' Takt';
   }
 }
-
-
-
 
 
 /* ── 5. Init ────────────────────────────────────────────────── */
@@ -145,8 +125,6 @@ async function init() {
   try {
     const res  = await fetch('/load');
     const data = await res.json();
-
-
 
     if (data.barLength) {
       state.barLength = data.barLength;
@@ -156,6 +134,14 @@ async function init() {
       state.audioUrl = data.audioUrl;
       dom.bgMusic().src = data.audioUrl;
       ui.markAudioLoaded(data.audioUrl);
+    }
+    if (Array.isArray(data.frameTimes) && data.frameTimes.length) {
+      state.frameTimes = data.frameTimes;
+    }
+    if (data.songOffset != null) {
+      state.songOffset = data.songOffset;
+      const label = document.getElementById('songOffsetLabel');
+      if (label) label.textContent = state.songOffset.toFixed(2) + 's';
     }
     if (Array.isArray(data.timeline) && data.timeline.length) {
       state.timeline = data.timeline.map(normalizeClip);
@@ -168,8 +154,6 @@ async function init() {
   }
   ui.updateEmptyState();
 }
-
-
 
 function normalizeClip(clip) {
   const factor = clip.durationFactor
@@ -184,13 +168,8 @@ function normalizeClip(clip) {
 }
 
 
-
-
-
 /* ── 6. Upload ──────────────────────────────────────────────── */
 const upload = {
-
-
 
   handleVideoFiles(files) {
     for (const file of files) {
@@ -211,8 +190,6 @@ const upload = {
       this._uploadVideo(file, clip.id);
     }
   },
-
-
 
   async _uploadVideo(file, id) {
     const fd = new FormData();
@@ -238,25 +215,22 @@ const upload = {
     }
   },
 
-
-
   async handleAudioFile(file) {
     if (!file) return;
     state.audioUrl    = URL.createObjectURL(file);
     dom.bgMusic().src = state.audioUrl;
     ui.markAudioLoaded(file.name);
-    ui.setStatus('Audio wird analysiert…', true);
-
-    // Playback sperren während Analyse
+    ui.setStatus('Audio wird analysiert...', true);
     ui.setAudioLoading(true);
+
+    // Waveform parallel dekodieren (lokale Blob-URL)
+    songMode._decodeWaveform(file);
 
     const fd = new FormData();
     fd.append('audio', file);
     try {
       const res  = await fetch('/upload-audio', { method: 'POST', body: fd });
       const data = await res.json();
-
-
 
       if (data.serverUrl) state.audioUrl = data.serverUrl;
       if (data.barLength) {
@@ -265,55 +239,47 @@ const upload = {
         state.timeline.forEach(c => { c.duration = clipDuration(c.durationFactor); });
         calcTotal();
         timeline._patchAllDurations();
-        sync.save();
         ui.toast(`Takt erkannt: ${state.barLength.toFixed(2)}s`, 'ok');
       }
+
+      // frameTimes aus Server-Antwort uebernehmen
+      if (Array.isArray(data.frameTimes) && data.frameTimes.length) {
+        state.frameTimes = data.frameTimes;
+        if (state.songMode) songMode._drawWaveform();
+        ui.toast(`${data.frameTimes.length} Einsteige erkannt`, 'ok');
+      }
+
+      sync.save();
       ui.setStatus('Audio geladen', false);
     } catch {
       ui.toast('Audio-Analyse fehlgeschlagen', 'err');
       ui.setStatus('Audio-Fehler', false);
     } finally {
-      // Sperre immer aufheben – auch bei Fehler
       ui.setAudioLoading(false);
     }
   },
 };
 
 
-
-
-
 /* ── 7. Timeline ────────────────────────────────────────────── */
 const timeline = {
-
-
 
   render() {
     calcTotal();
     dom.clipCount().textContent = state.timeline.length;
 
-
-
     dom.timeline().querySelectorAll('.clip-card').forEach(el => el.remove());
     dom.videoEngine().querySelectorAll('.video-layer').forEach(el => el.remove());
 
-
-
     const fragment = document.createDocumentFragment();
-
-
 
     state.timeline.forEach((clip, i) => {
       this._addVideoLayer(clip, i);
       fragment.appendChild(this._createCard(clip, i));
     });
 
-
-
     dom.timeline().insertBefore(fragment, dom.tlDropzone());
   },
-
-
 
   _patchCardStatus(id) {
     const index = state.timeline.findIndex(c => c.id === id);
@@ -321,8 +287,6 @@ const timeline = {
     const clip = state.timeline[index];
     const card = dom.timeline().querySelectorAll('.clip-card')[index];
     if (!card) return;
-
-
 
     card.classList.toggle('uploading', clip.status === 'uploading');
     const existingOverlay = card.querySelector('.clip-thumb-overlay');
@@ -336,8 +300,6 @@ const timeline = {
     }
   },
 
-
-
   _patchAllDurations() {
     const cards = dom.timeline().querySelectorAll('.clip-card');
     state.timeline.forEach((clip, i) => {
@@ -347,8 +309,6 @@ const timeline = {
       if (secEl) secEl.textContent = factorLabel(clip.durationFactor);
     });
   },
-
-
 
   _addVideoLayer(clip, index) {
     const v = document.createElement('video');
@@ -365,8 +325,6 @@ const timeline = {
     return v;
   },
 
-
-
   _createCard(clip, index) {
     const card = document.createElement('div');
     card.className   = 'clip-card' + (clip.status === 'uploading' ? ' uploading' : '');
@@ -376,11 +334,7 @@ const timeline = {
     card.setAttribute('tabindex', '0');
     card.setAttribute('aria-label', `Clip ${index + 1}: ${clip.name}`);
 
-
-
     const thumbSrc = clip.localUrl || clip.serverUrl || '';
-
-
 
     card.innerHTML = `
       <div class="drag-handle" aria-hidden="true"></div>
@@ -402,7 +356,7 @@ const timeline = {
       </div>
       <div class="clip-footer">
         <span class="clip-sec">${factorLabel(clip.durationFactor)}</span>
-        <button class="clip-trim" title="Startzeitpunkt setzen" aria-label="Trim">✂️</button>
+        <button class="clip-trim" title="Startzeitpunkt setzen" aria-label="Trim">&#9986;&#65039;</button>
         <button class="clip-clone" title="Clip duplizieren" aria-label="Clip klonen">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
@@ -410,15 +364,13 @@ const timeline = {
             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
           </svg>
         </button>
-        <button class="clip-delete" aria-label="Clip löschen" title="Löschen">
+        <button class="clip-delete" aria-label="Clip loeschen" title="Loeschen">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
         </button>
       </div>`;
-
-
 
     const thumbVideo = card.querySelector('.clip-thumb video');
     if (thumbVideo) {
@@ -431,13 +383,9 @@ const timeline = {
       obs.observe(thumbVideo);
     }
 
-
-
     this._bindCardEvents(card, index);
     return card;
   },
-
-
 
   _bindCardEvents(card, index) {
     card.addEventListener('dragstart', () => {
@@ -469,8 +417,6 @@ const timeline = {
       sync.save();
     });
 
-
-
     card.addEventListener('click', (e) => {
       if (
         e.target.closest('.clip-delete') ||
@@ -484,16 +430,12 @@ const timeline = {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playback.start(index); }
     });
 
-
-
     card.querySelectorAll('.dur-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         this.updateDuration(index, parseFloat(btn.dataset.val));
       });
     });
-
-
 
     card.querySelector('.clip-trim').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -509,19 +451,15 @@ const timeline = {
           sync.save();
           ui.toast(`Startzeit auf ${newOffset}s gesetzt`, 'ok');
         } else {
-          ui.toast('Ungültige Eingabe (bitte nur Zahlen)', 'err');
+          ui.toast('Ungueltige Eingabe (bitte nur Zahlen)', 'err');
         }
       }
     });
-
-
 
     card.querySelector('.clip-clone').addEventListener('click', (e) => {
       e.stopPropagation();
       this.clone(index);
     });
-
-
 
     card.querySelector('.clip-delete').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -529,16 +467,12 @@ const timeline = {
     });
   },
 
-
-
   updateDuration(index, factor) {
     const clip = state.timeline[index];
     clip.durationFactor = factor;
     clip.duration       = clipDuration(factor);
     calcTotal();
     sync.save();
-
-
 
     const card = dom.timeline().querySelectorAll('.clip-card')[index];
     if (!card) return;
@@ -549,14 +483,12 @@ const timeline = {
     if (secEl) secEl.textContent = factorLabel(factor);
   },
 
-
-
   clone(index) {
     const original = state.timeline[index];
     const cloned = {
       ...original,
-      id:      uid(),
-      name:    original.name.replace(/(\.[^.]+)$/, '_copy$1'),
+      id:       uid(),
+      name:     original.name.replace(/(\.[^.]+)$/, '_copy$1'),
       localUrl: original.localUrl,
     };
     state.timeline.splice(index + 1, 0, cloned);
@@ -564,8 +496,6 @@ const timeline = {
     sync.save();
     ui.toast(`"${original.name.substr(0, 18)}" geklont`, 'ok');
   },
-
-
 
   remove(index) {
     playback.stop();
@@ -578,83 +508,60 @@ const timeline = {
 };
 
 
-
-
-
 /* ── 8. Playback ────────────────────────────────────────────── */
 const playback = {
-
-
 
   _cards:  [],
   _videos: [],
   _lastFrameTime:   0,
   _lastActiveIndex: -1,
 
-
-
   start(fromIndex = 0) {
     this.stop();
     if (!state.timeline.length) return;
 
-    // Playback blockieren solange Audio noch lädt
     if (dom.playBtn().disabled) {
-      ui.toast('Bitte warten – Audio wird noch analysiert…', 'info');
+      ui.toast('Bitte warten - Audio wird noch analysiert...', 'info');
       return;
     }
 
-    const offset = state.timeline
+    const clipOffset = state.timeline
       .slice(0, fromIndex)
       .reduce((acc, c) => acc + (c.duration || 0), 0);
 
-
+    // Song-Offset: wenn Song-Modus aktiv, startet Audio bei state.songOffset
+    const audioStartTime = state.songOffset + clipOffset;
 
     state.isPlaying = true;
-    state.startTime = performance.now() - offset * 1000;
-
-
+    state.startTime = performance.now() - clipOffset * 1000;
 
     this._cards  = [...dom.timeline().querySelectorAll('.clip-card')];
     this._videos = state.timeline.map((_, i) => document.getElementById(`vl-${i}`));
     this._lastFrameTime   = 0;
     this._lastActiveIndex = -1;
 
-
-
     ui.setPlayingState(true);
-
-
 
     const audio = dom.bgMusic();
     if (state.audioUrl) {
-      audio.currentTime = offset;
+      audio.currentTime = audioStartTime;
       audio.play().catch(() => {});
     }
 
-
-
     this._loop();
   },
-
-
 
   stop() {
     state.isPlaying = false;
     cancelAnimationFrame(state.rafHandle);
 
-
-
     dom.bgMusic().pause();
     document.querySelectorAll('.video-layer').forEach(v => { v.pause(); v.style.opacity = '0'; });
     document.querySelectorAll('.clip-card').forEach(c => c.classList.remove('active-clip'));
 
-
-
     this._cards  = [];
     this._videos = [];
     this._lastActiveIndex = -1;
-
-
 
     ui.setPlayingState(false);
     dom.progressBar().style.width  = '0%';
@@ -662,49 +569,35 @@ const playback = {
     ui.setStatus('Bereit', false);
   },
 
-
-
   _loop() {
     if (!state.isPlaying) return;
-
-
 
     const now     = performance.now();
     const elapsed = (now - state.startTime) / 1000;
 
-
-
     this._syncAudio(elapsed);
     this._updateLayers(elapsed);
-
-
 
     if (now - this._lastFrameTime >= PLAYBACK_INTERVAL) {
       this._lastFrameTime = now;
       this._updateUI(elapsed);
     }
 
-
-
     state.rafHandle = requestAnimationFrame(() => this._loop());
   },
 
-
-
   _syncAudio(elapsed) {
-    const audio = dom.bgMusic();
-    if (state.audioUrl && Math.abs(audio.currentTime - elapsed) > AUDIO_DRIFT_MS) {
-      audio.currentTime = elapsed;
+    const audio    = dom.bgMusic();
+    const baseTime = state.songOffset;
+    const target   = baseTime + elapsed;
+    if (state.audioUrl && Math.abs(audio.currentTime - target) > AUDIO_DRIFT_MS) {
+      audio.currentTime = target;
     }
   },
-
-
 
   _updateLayers(elapsed) {
     let pos         = 0;
     let foundActive = false;
-
-
 
     for (let i = 0; i < state.timeline.length; i++) {
       const clip  = state.timeline[i];
@@ -712,10 +605,7 @@ const playback = {
       const end   = pos + (clip.duration || 0);
       pos         = end;
 
-
       const isActive = elapsed >= start && elapsed < end;
-
-
 
       if (!isActive && i > 0) {
         const isUpNext = elapsed >= start - PRELOAD_LOOKAHEAD && elapsed < start;
@@ -727,28 +617,18 @@ const playback = {
         }
       }
 
-
-
       if (!isActive) continue;
-
 
       foundActive = true;
       const video = this._videos[i];
       const card  = this._cards[i];
 
-
-
       if (video && video.style.opacity !== '1') {
-
-
         video.style.opacity = '1';
         video.currentTime   = (elapsed - start) + (clip.videoOffset || 0);
 
-
-
-        const prevIndex = this._lastActiveIndex;
+        const prevIndex   = this._lastActiveIndex;
         const playPromise = video.play();
-
 
         if (playPromise !== undefined) {
           playPromise
@@ -781,16 +661,12 @@ const playback = {
         }
       }
 
-
-
       if (this._lastActiveIndex !== i) {
         card?.classList.add('active-clip');
         card?.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' });
         this._lastActiveIndex = i;
       }
     }
-
-
 
     if (!foundActive) {
       if (elapsed >= state.totalDuration - END_TOLERANCE || elapsed > state.totalDuration) {
@@ -801,40 +677,33 @@ const playback = {
     }
   },
 
-
-
   _updateUI(elapsed) {
     if (!state.isPlaying) return;
     if (state.totalDuration > 0) {
       dom.progressBar().style.width = Math.min(elapsed / state.totalDuration * 100, 100) + '%';
     }
     dom.timeOverlay().textContent = fmtTime(elapsed);
-    ui.setStatus(`▶ ${fmtTime(elapsed)} / ${fmtTime(state.totalDuration)}`, true);
+    ui.setStatus(`Abspielen ${fmtTime(elapsed)} / ${fmtTime(state.totalDuration)}`, true);
   },
 };
-
-
-
 
 
 /* ── 9. Sync ────────────────────────────────────────────────── */
 const sync = {
   _timer: null,
 
-
-
   save() {
     clearTimeout(this._timer);
     this._timer = setTimeout(() => this._flush(), 600);
   },
 
-
-
   async _flush() {
     const payload = {
-      timeline:  state.timeline.map(({ localUrl, ...rest }) => rest),
-      audioUrl:  state.audioUrl,
-      barLength: state.barLength,
+      timeline:   state.timeline.map(({ localUrl, ...rest }) => rest),
+      audioUrl:   state.audioUrl,
+      barLength:  state.barLength,
+      songOffset: state.songOffset,
+      frameTimes: state.frameTimes,
     };
     try {
       await fetch('/sync', {
@@ -849,13 +718,8 @@ const sync = {
 };
 
 
-
-
-
 /* ── 10. UI Helpers ─────────────────────────────────────────── */
 const ui = {
-
-
 
   toast(msg, type = 'info') {
     const c = dom.toastContainer();
@@ -869,40 +733,30 @@ const ui = {
     }, 3200);
   },
 
-
-
   setStatus(msg, active = false) {
     dom.statusText().textContent = msg;
     dom.statusPill().classList.toggle('active', active);
   },
 
-
-
   updateBarBadge() {
     dom.barBadge().textContent = state.barLength
       ? state.barLength.toFixed(2) + 's'
-      : '–';
+      : '-';
   },
-
-
 
   updateEmptyState() {
     dom.previewEmpty().style.opacity = state.timeline.length === 0 ? '1' : '0';
   },
-
-
 
   markAudioLoaded(nameOrUrl) {
     const label   = dom.audioBtnLabel();
     const text    = dom.audioBtnText();
     label.classList.add('has-file');
     const display = typeof nameOrUrl === 'string' && nameOrUrl.length > 14
-      ? nameOrUrl.substr(0, 12) + '…'
+      ? nameOrUrl.substr(0, 12) + '...'
       : nameOrUrl;
     text.textContent = display;
   },
-
-
 
   setPlayingState(playing) {
     const btn   = dom.playBtn();
@@ -915,29 +769,21 @@ const ui = {
       : '<polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>';
   },
 
-
-
-  // NEU: Play-Button sperren/freigeben während Audio-Analyse
   setAudioLoading(loading) {
     const btn = dom.playBtn();
-
     if (loading) {
       btn.disabled = true;
       btn.classList.add('audio-loading');
-
-      // Persistenter Lade-Toast (bleibt bis Analyse fertig)
       const c = dom.toastContainer();
       const t = document.createElement('div');
       t.id        = 'audioLoadingToast';
       t.className = 'toast';
       t.innerHTML = `<span class="toast-dot info"></span>
-                     <span>🎵 Track wird geladen & analysiert…</span>`;
+                     <span>Track wird geladen &amp; analysiert...</span>`;
       c.appendChild(t);
     } else {
       btn.disabled = false;
       btn.classList.remove('audio-loading');
-
-      // Lade-Toast entfernen
       const existing = document.getElementById('audioLoadingToast');
       if (existing) {
         existing.classList.add('hide');
@@ -946,8 +792,6 @@ const ui = {
     }
   },
 
-
-
   initThemeToggle() {
     const btn  = document.querySelector('[data-theme-toggle]');
     const root = document.documentElement;
@@ -955,15 +799,13 @@ const ui = {
     root.setAttribute('data-theme', theme);
     setIcon();
 
-
-
     btn.addEventListener('click', () => {
       theme = theme === 'dark' ? 'light' : 'dark';
       root.setAttribute('data-theme', theme);
       setIcon();
+      // Waveform bei Theme-Wechsel neu zeichnen
+      if (state.songMode) songMode._drawWaveform();
     });
-
-
 
     function setIcon() {
       btn.innerHTML = theme === 'dark'
@@ -971,8 +813,6 @@ const ui = {
         : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
     }
   },
-
-
 
   initDropzone() {
     const dz = dom.tlDropzone();
@@ -986,8 +826,6 @@ const ui = {
     });
   },
 
-
-
   initKeyboard() {
     document.addEventListener('keydown', (e) => {
       const tag = e.target.tagName;
@@ -996,8 +834,6 @@ const ui = {
       if (e.key === 'Escape') playback.stop();
     });
   },
-
-
 
   initButtons() {
     dom.videoInput().addEventListener('change', (e) => {
@@ -1012,22 +848,24 @@ const ui = {
       state.isPlaying ? playback.stop() : playback.start();
     });
     dom.clearBtn().addEventListener('click', async () => {
-      if (!confirm('Session wirklich löschen?')) return;
+      if (!confirm('Session wirklich loeschen?')) return;
       playback.stop();
-      state.timeline  = [];
-      state.audioUrl  = null;
-      state.barLength = null;
+      state.timeline   = [];
+      state.audioUrl   = null;
+      state.barLength  = null;
+      state.frameTimes = [];
+      state.songOffset = 0;
+      state.audioBuffer = null;
       dom.bgMusic().src = '';
       dom.audioBtnLabel().classList.remove('has-file');
       dom.audioBtnText().textContent = 'Audio';
       this.updateBarBadge();
       timeline.render();
+      if (state.songMode) songMode.toggle();
       await sync._flush();
       this.updateEmptyState();
-      this.toast('Session gelöscht', 'info');
+      this.toast('Session geloescht', 'info');
     });
-
-
 
     const formatToggleBtn = document.getElementById('formatToggleBtn');
     let isReelFormat = false;
@@ -1045,19 +883,391 @@ const ui = {
       });
     }
 
-
-
     const musicVolumeSlider = document.getElementById('musicVolume');
     if (musicVolumeSlider) {
       musicVolumeSlider.addEventListener('input', (e) => {
         dom.bgMusic().volume = parseFloat(e.target.value);
       });
     }
+
+    // Song-Modus Toggle-Button
+    const songModeBtn = document.getElementById('songModeToggle');
+    if (songModeBtn) {
+      songModeBtn.addEventListener('click', () => songMode.toggle());
+    }
   },
 };
 
 
+/* ── 11. Song Mode ──────────────────────────────────────────── */
+// Sichtbares Zeitfenster um den aktuellen Einstieg
+const SONG_WIN_BEFORE = 15;   // Sekunden vor dem Scrubber
+const SONG_WIN_AFTER  = 30;   // Sekunden nach dem Scrubber
+const songMode = {
 
+  _canvas:          null,
+  _ctx:             null,
+  _waveData:        null,    // Float32Array – volle Länge downgesampelt
+  _dragging:        false,
+  _resizeObserver:  null,
+
+  // ── Panel & Canvas initialisieren ────────────────────────────
+  init() {
+    if (!document.getElementById('songModePanel')) {
+      const panel = document.createElement('div');
+      panel.id        = 'songModePanel';
+      panel.className = 'song-mode-panel';
+      panel.style.display = 'none';
+      panel.innerHTML = `
+        <div class="song-mode-header">
+          <div class="song-mode-title-row">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 aria-hidden="true">
+              <path d="M9 18V5l12-2v13"/>
+              <circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+            </svg>
+            <span class="song-mode-title">Song-Einstieg</span>
+          </div>
+          <div class="song-mode-meta">
+            <span class="song-offset-label" id="songOffsetLabel">0.00s</span>
+            <span class="song-offset-name"  id="songOffsetName">-</span>
+          </div>
+        </div>
+        <div class="song-waveform-wrap" id="songWaveformWrap">
+          <canvas id="songWaveCanvas" height="80"
+                  aria-label="Waveform-Scrubber – Einstiegspunkt ziehen"></canvas>
+          <div id="songScrubLine" class="song-scrub-line">
+            <div class="song-scrub-handle"
+                 aria-label="Scrub-Position"
+                 role="slider"
+                 tabindex="0"
+                 aria-valuenow="0"
+                 aria-valuemin="0"
+                 aria-valuemax="100">
+            </div>
+          </div>
+          <div class="song-waveform-hint" id="songWaveHint">
+            Lade zuerst einen Audio-Track
+          </div>
+          <div class="song-win-labels" id="songWinLabels" aria-hidden="true"></div>
+        </div>
+        <p class="song-mode-hint">
+          <span class="song-hint-dot"></span>
+          Gelbe Marker = erlaubte Einsteige · Linie ziehen zum Auswaehlen
+        </p>`;
+
+      const ref = document.getElementById('timeline')?.parentElement
+               || document.querySelector('main')
+               || document.body;
+      ref.appendChild(panel);
+    }
+
+    this._canvas = document.getElementById('songWaveCanvas');
+    if (!this._canvas) return;
+    this._ctx = this._canvas.getContext('2d');
+
+    this._resizeObserver = new ResizeObserver(() => {
+      if (state.songMode) {
+        this._resizeCanvas();
+        this._drawWaveform();
+        this._updateScrubLine();
+      }
+    });
+    const wrap = document.getElementById('songWaveformWrap');
+    if (wrap) this._resizeObserver.observe(wrap);
+
+    this._bindScrubEvents();
+  },
+
+  // ── Ein-/Ausschalten ─────────────────────────────────────────
+  toggle() {
+    state.songMode = !state.songMode;
+    const panel = document.getElementById('songModePanel');
+    const btn   = document.getElementById('songModeToggle');
+    if (panel) panel.style.display = state.songMode ? 'block' : 'none';
+    if (btn)   btn.classList.toggle('active', state.songMode);
+
+    if (state.songMode) {
+      this._resizeCanvas();
+      this._drawWaveform();
+      this._updateScrubLine();
+      ui.toast('Song-Modus aktiv', 'ok');
+    }
+  },
+
+  // ── AudioBuffer dekodieren ────────────────────────────────────
+  async _decodeWaveform(file) {
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const audioCtx    = new (window.AudioContext || window.webkitAudioContext)();
+      const buffer      = await audioCtx.decodeAudioData(arrayBuffer);
+      state.audioBuffer = buffer;
+      // Hochauflösendes Downsample – 1 Bucket ≈ ~10ms bei 3min Track
+      this._waveData    = this._downsample(buffer.getChannelData(0), Math.round(buffer.duration * 100));
+      audioCtx.close();
+
+      if (state.songMode) {
+        this._resizeCanvas();
+        this._drawWaveform();
+        this._updateScrubLine();
+      }
+      const hint = document.getElementById('songWaveHint');
+      if (hint) hint.style.display = 'none';
+    } catch (e) {
+      console.warn('[SongMode] Waveform-Dekodierung fehlgeschlagen:', e);
+    }
+  },
+
+  // ── Downsample ────────────────────────────────────────────────
+  _downsample(data, n) {
+    const step   = Math.floor(data.length / n);
+    const result = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      let max = 0;
+      for (let j = 0; j < step; j++) {
+        const v = Math.abs(data[i * step + j] || 0);
+        if (v > max) max = v;
+      }
+      result[i] = max;
+    }
+    const peak = Math.max(...result) || 1;
+    return result.map(v => v / peak);
+  },
+
+  // ── Zeitfenster berechnen ─────────────────────────────────────
+  // Gibt { winStart, winEnd } in Sekunden zurück.
+  // Das Fenster klemmt an den Track-Grenzen.
+  _getWindow() {
+    const duration = state.audioBuffer?.duration || state.totalDuration || 60;
+    const anchor   = state.songOffset;
+    const winStart = Math.max(0, anchor - SONG_WIN_BEFORE);
+    const winEnd   = Math.min(duration, anchor + SONG_WIN_AFTER);
+    return { winStart, winEnd, duration };
+  },
+
+  // ── Canvas Breite anpassen ────────────────────────────────────
+  _resizeCanvas() {
+    const wrap = document.getElementById('songWaveformWrap');
+    const w    = wrap ? Math.floor(wrap.clientWidth) : 600;
+    if (this._canvas.width !== w) {
+      this._canvas.width       = w;
+      this._canvas.style.width = w + 'px';
+    }
+  },
+
+  // ── Waveform + Frame-Marker zeichnen (Zoom-Fenster) ──────────
+  _drawWaveform() {
+    if (!this._canvas || !this._ctx) return;
+
+    const canvas   = this._canvas;
+    const ctx      = this._ctx;
+    const W        = canvas.width;
+    const H        = canvas.height;
+    const isDark   = document.documentElement.getAttribute('data-theme') !== 'light';
+    const { winStart, winEnd, duration } = this._getWindow();
+    const winLen   = winEnd - winStart;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Hintergrund
+    ctx.fillStyle = isDark ? '#1c1b19' : '#f3f0ec';
+    ctx.fillRect(0, 0, W, H);
+
+    // Linke Abdunkelzone (vor dem Einstieg)
+    const anchorX = ((state.songOffset - winStart) / winLen) * W;
+    ctx.fillStyle = isDark
+      ? 'rgba(0,0,0,0.28)'
+      : 'rgba(0,0,0,0.07)';
+    ctx.fillRect(0, 0, anchorX, H);
+
+    if (!this._waveData) {
+      // Fallback-Mittellinie
+      ctx.strokeStyle = isDark ? '#393836' : '#d4d1ca';
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, H / 2);
+      ctx.lineTo(W, H / 2);
+      ctx.stroke();
+      return;
+    }
+
+    // Waveform-Balken für das sichtbare Fenster
+    const mid       = H / 2;
+    const totalBuks = this._waveData.length;
+    const startBuk  = Math.floor((winStart / duration) * totalBuks);
+    const endBuk    = Math.ceil((winEnd   / duration) * totalBuks);
+    const visCount  = endBuk - startBuk;
+    const barW      = W / visCount;
+
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    if (isDark) {
+      grad.addColorStop(0,   'rgba(79,152,163,0.72)');
+      grad.addColorStop(0.5, 'rgba(79,152,163,0.42)');
+      grad.addColorStop(1,   'rgba(79,152,163,0.72)');
+    } else {
+      grad.addColorStop(0,   'rgba(1,105,111,0.62)');
+      grad.addColorStop(0.5, 'rgba(1,105,111,0.32)');
+      grad.addColorStop(1,   'rgba(1,105,111,0.62)');
+    }
+    ctx.fillStyle = grad;
+
+    for (let i = 0; i < visCount; i++) {
+      const buk = startBuk + i;
+      if (buk >= totalBuks) break;
+      const x = i * barW;
+      const h = this._waveData[buk] * (mid - 4);
+      ctx.fillRect(x, mid - h, Math.max(barW - 0.8, 0.5), h * 2);
+    }
+
+    // Frame-Marker (nur die im sichtbaren Fenster)
+    if (state.frameTimes.length && winLen > 0) {
+      state.frameTimes.forEach((t) => {
+        if (t < winStart || t > winEnd) return;
+        const x = ((t - winStart) / winLen) * W;
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(253,171,67,0.82)';
+        ctx.lineWidth   = 1.5;
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x, 5);
+        ctx.lineTo(x, H - 5);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+
+        ctx.fillStyle = '#fdab43';
+        ctx.beginPath();
+        ctx.arc(x, H - 4, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // Fenster-Zeitstempel aktualisieren
+    this._updateWinLabels(winStart, winEnd);
+  },
+
+  // ── Zeitstempel links/rechts ──────────────────────────────────
+  _updateWinLabels(winStart, winEnd) {
+    const el = document.getElementById('songWinLabels');
+    if (!el) return;
+    el.innerHTML =
+      `<span>${fmtTime(winStart)}</span><span>${fmtTime(winEnd)}</span>`;
+  },
+
+  // ── Scrub-Linie positionieren ─────────────────────────────────
+  _updateScrubLine() {
+    const line    = document.getElementById('songScrubLine');
+    const handle  = line?.querySelector('.song-scrub-handle');
+    const label   = document.getElementById('songOffsetLabel');
+    const nameEl  = document.getElementById('songOffsetName');
+    const canvas  = this._canvas;
+    if (!line || !canvas) return;
+
+    const { winStart, winEnd } = this._getWindow();
+    const winLen = winEnd - winStart;
+    const x      = winLen > 0
+      ? ((state.songOffset - winStart) / winLen) * canvas.width
+      : 0;
+    line.style.left = Math.round(Math.max(0, x)) + 'px';
+
+    if (label) label.textContent = state.songOffset.toFixed(2) + 's';
+
+    if (nameEl && state.frameTimes.length) {
+      const idx = state.frameTimes.findIndex(t => Math.abs(t - state.songOffset) < 0.001);
+      nameEl.textContent = idx >= 0
+        ? `Einstieg ${idx + 1} / ${state.frameTimes.length}`
+        : '-';
+    }
+
+    const duration = state.audioBuffer?.duration || 1;
+    if (handle) {
+      const pct = duration > 0 ? Math.round((state.songOffset / duration) * 100) : 0;
+      handle.setAttribute('aria-valuenow', pct);
+    }
+  },
+
+  // ── Snap auf nächsten frameTimes-Einstieg ─────────────────────
+  _snap(rawSec) {
+    if (!state.frameTimes.length) return Math.max(0, rawSec);
+    let nearest = state.frameTimes[0];
+    let minDist = Infinity;
+    for (const t of state.frameTimes) {
+      const d = Math.abs(t - rawSec);
+      if (d < minDist) { minDist = d; nearest = t; }
+    }
+    return nearest;
+  },
+
+  // ── Maus/Touch X → Sekunden (im Fenster-Koordinatensystem) ───
+  _xToSec(clientX) {
+    const rect = this._canvas.getBoundingClientRect();
+    const rawX = Math.max(0, Math.min(clientX - rect.left, rect.width));
+    const { winStart, winEnd } = this._getWindow();
+    const winLen = winEnd - winStart;
+    return winStart + (rawX / rect.width) * winLen;
+  },
+
+  // ── Events binden ────────────────────────────────────────────
+  _bindScrubEvents() {
+    document.addEventListener('mousedown',  (e) => this._onDown(e));
+    document.addEventListener('mousemove',  (e) => this._onMoveGlobal(e));
+    document.addEventListener('mouseup',    ()  => { this._dragging = false; });
+
+    document.addEventListener('touchstart', (e) => this._onDown(e),       { passive: true });
+    document.addEventListener('touchmove',  (e) => this._onMoveGlobal(e), { passive: true });
+    document.addEventListener('touchend',   ()  => { this._dragging = false; });
+
+    document.addEventListener('keydown', (e) => {
+      const handle = document.querySelector('.song-scrub-handle:focus');
+      if (!handle || !state.songMode || !state.frameTimes.length) return;
+      const curIdx = state.frameTimes.findIndex(t => Math.abs(t - state.songOffset) < 0.001);
+      let newIdx = curIdx < 0 ? 0 : curIdx;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        newIdx = Math.min(newIdx + 1, state.frameTimes.length - 1);
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        newIdx = Math.max(newIdx - 1, 0);
+      } else { return; }
+      this._applyOffset(state.frameTimes[newIdx]);
+    });
+  },
+
+  _onDown(e) {
+    if (!state.songMode) return;
+    const canvas  = this._canvas;
+    const scrubEl = document.getElementById('songScrubLine');
+    const target  = e.target || e.touches?.[0]?.target;
+    const isCanvas = canvas && (target === canvas || canvas.contains(target));
+    const isScrub  = scrubEl && (target === scrubEl || scrubEl.contains(target));
+    if (!isCanvas && !isScrub) return;
+    this._dragging = true;
+    const clientX  = e.touches ? e.touches[0].clientX : e.clientX;
+    this._applyOffset(this._snap(this._xToSec(clientX)));
+  },
+
+  _onMoveGlobal(e) {
+    if (!this._dragging || !state.songMode) return;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    this._applyOffset(this._snap(this._xToSec(clientX)));
+  },
+
+  _applyOffset(sec) {
+    state.songOffset = sec;
+
+    if (state.isPlaying && state.audioUrl) {
+      const elapsed = (performance.now() - state.startTime) / 1000;
+      dom.bgMusic().currentTime = state.songOffset + elapsed;
+    }
+
+    // Fenster verschiebt sich → kompletter Redraw
+    this._drawWaveform();
+    this._updateScrubLine();
+    sync.save();
+  },
+};
 
 
 /* ── Boot ───────────────────────────────────────────────────── */
@@ -1066,5 +1276,6 @@ document.addEventListener('DOMContentLoaded', () => {
   ui.initButtons();
   ui.initDropzone();
   ui.initKeyboard();
+  songMode.init();
   init();
 });

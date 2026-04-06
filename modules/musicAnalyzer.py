@@ -8,6 +8,8 @@ class musicAnalyzer:
         print(f"Geschätztes Tempo: {self.tempo} BPM")
         print("Beat-Frames:", librosa.frames_to_time(self.beat_frames,sr=self.sr))
 
+    def getframesInSeconds(self):
+        return librosa.frames_to_time(self.beat_frames, sr=self.sr)
 
     def get_start_time(self,start_time):
         beatFramesInSeconds = librosa.frames_to_time(self.beat_frames, sr=self.sr)

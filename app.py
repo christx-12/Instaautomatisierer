@@ -84,17 +84,20 @@ def upload_audio():
     try:
         analyzer = musicAnalyzer(filepath)
         bar_length = analyzer.get_bar_time()
+        frame_times = analyzer.get_beat_times()
         try:
             bar_length = float(bar_length[0])
+            frame_times = [float(time) for time in frame_times]
         except (TypeError, IndexError):
             bar_length = float(bar_length)
     except Exception as e:
         print(f"Fehler bei Audio-Analyse: {e}")
         bar_length = 5.0 # Fallback
-        
+        frame_times = [0.0]
     return jsonify({
         "serverUrl": server_url,
-        "barLength": bar_length
+        "barLength": bar_length,
+        "frameTimes": frame_times
     })
 
 # 3. Timeline Status laden

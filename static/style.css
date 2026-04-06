@@ -352,3 +352,73 @@ input[type="file"] { display: none; }
   cursor: not-allowed;
   pointer-events: none;
 }
+.song-mode-panel {
+  margin: 12px 0;
+  background: var(--color-surface-2);
+  border-radius: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+}
+.song-mode-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.song-mode-title    { font-weight: 600; font-size: 0.85rem; }
+.song-mode-offset-label {
+  font-family: monospace;
+  font-size: 0.9rem;
+  color: #ffc83c;
+}
+.song-waveform-wrap {
+  position: relative;
+  width: 100%;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: ew-resize;
+}
+#songWaveCanvas {
+  display: block;
+  width: 100%;
+  border-radius: 6px;
+}
+.song-scrub-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  height: 100%;
+  background: #fff;
+  box-shadow: 0 0 6px rgba(255,255,255,0.6);
+  pointer-events: none;
+  transition: left 0.05s linear;
+}
+.song-mode-hint {
+  font-size: 0.72rem;
+  opacity: 0.5;
+  margin-top: 6px;
+  margin-bottom: 0;
+}
+#songModeToggle.active {
+  background: var(--color-accent);
+  color: #fff;
+}
+/* ── Fenster-Zeitstempel (links/rechts unter Waveform) ─────── */
+.song-win-labels {
+  position: absolute;
+  bottom: 3px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  padding: 0 var(--space-2, 0.5rem);
+  pointer-events: none;
+  font-family: monospace;
+  font-size: 10px;
+  color: rgba(255,255,255,0.45);
+  line-height: 1;
+}
+[data-theme="light"] .song-win-labels {
+  color: rgba(0,0,0,0.3);
+}
